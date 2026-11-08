@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Котоба</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #fbfaf7);
+    --card: var(--tg-theme-secondary-bg-color, #f1eee8);
+    --text: var(--tg-theme-text-color, #1d1b18);
+    --muted: var(--tg-theme-hint-color, #8a847a);
+    --accent: #d1453b;
+    --btn: var(--tg-theme-button-color, #d1453b);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --line: rgba(127, 120, 110, .22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: var(--tg-theme-bg-color, #171614);
+      --card: var(--tg-theme-secondary-bg-color, #24221f);
+      --text: var(--tg-theme-text-color, #eeeae3);
+      --muted: var(--tg-theme-hint-color, #968f84);
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 16px/1.4 -apple-system, "SF Pro Text", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
+  #app { max-width: 520px; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); min-height: 100vh; display: flex; flex-direction: column; gap: 12px; }
+  .muted { color: var(--muted); } .small { font-size: 13px; } .accent { color: var(--accent); } .center { text-align: center; }
+  .row { display: flex; justify-content: space-between; align-items: center; } .gap { gap: 8px; }
+  h2, h3 { margin: 8px 0 0; } h3 { font-size: 15px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+
+  .hero { display: flex; gap: 14px; align-items: center; }
+  .logo { width: 56px; height: 56px; border-radius: 16px; background: var(--accent); color: #fff; display: grid; place-items: center; font: 600 22px "Hiragino Mincho ProN", serif; letter-spacing: -1px; }
+  .title { font-size: 22px; font-weight: 700; }
+  .today { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat { background: var(--card); border-radius: 14px; padding: 12px; text-align: center; }
+  .num { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .btn { appearance: none; border: 0; border-radius: 12px; padding: 12px 14px; font: inherit; font-weight: 600; background: var(--card); color: var(--text); cursor: pointer; }
+  .btn:active { transform: scale(.98); }
+  .btn.primary { background: var(--btn); color: var(--btn-text); }
+  .btn.big { width: 100%; padding: 16px; font-size: 17px; }
+  .btn.ghost { background: transparent; color: var(--muted); }
+  .btn.danger { color: #e5484d; }
+  .done { background: var(--card); border-radius: 14px; padding: 16px; text-align: center; font-weight: 600; }
+
+  .deck { background: var(--card); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .deck.locked { opacity: .55; }
+  .deck-top { display: flex; justify-content: space-between; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }
+
+  .progress { display: flex; flex-direction: column; gap: 6px; }
+  .card { position: relative; background: var(--card); border-radius: 20px; padding: 28px 18px; text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 10px; min-height: 300px; }
+  .front { font-size: 88px; line-height: 1.1; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; word-break: keep-all; }
+  .front.word { font-size: 44px; }
+  .sep { height: 1px; background: var(--line); margin: 6px 20px; }
+  .answer { font-size: 24px; font-weight: 600; }
+  .kanji-form { font-size: 34px; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  .readings { display: flex; flex-direction: column; gap: 4px; font-size: 18px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; margin-right: 4px; vertical-align: middle; }
+  .examples { text-align: left; font-size: 15px; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .ex .jp { font-size: 18px; }
+  .placeholder { font-size: 16px; padding: 18px 0; }
+  .icon { position: absolute; top: 10px; right: 10px; border: 0; background: transparent; font-size: 22px; padding: 8px; cursor: pointer; }
+  .hint { text-align: center; }
+
+  .actions { display: flex; gap: 8px; }
+  .grades { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .grade { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 4px; font-size: 14px; }
+  .grade span { font-size: 12px; font-weight: 500; opacity: .75; }
+  .g0 { background: rgba(229, 72, 77, .16); color: #e5484d; }
+  .g1 { background: rgba(232, 150, 30, .16); color: #d68512; }
+  .g2 { background: rgba(48, 164, 108, .16); color: #2b9a64; }
+  .g3 { background: rgba(62, 99, 221, .16); color: #4a6fe0; }
+
+  .finish { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 4px; }
+  .big-emoji { font-size: 64px; }
+  .set-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--card); border-radius: 12px; padding: 10px 14px; }
+  .set-row input[type=number] { width: 70px; font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); text-align: center; }
+  .set-row input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+  textarea { width: 100%; font: 12px ui-monospace, monospace; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
+  .loading { flex: 1; display: grid; place-items: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">読み込み中…</div></div>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

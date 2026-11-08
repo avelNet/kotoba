@@ -1,0 +1,25 @@
+name: Daily reminder
+
+on:
+  schedule:
+    # 00:47 UTC = 07:47 по Новосибирску. GitHub иногда запускает с опозданием на 5–30 минут.
+    - cron: '47 0 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'remind — отправить напоминание, setup — поставить кнопку меню'
+        default: remind
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/bot.mjs ${{ github.event.inputs.mode || 'remind' }}
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          APP_URL: ${{ vars.APP_URL }}
