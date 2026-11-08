@@ -141,6 +141,20 @@ function buildQueue(state, today, extra = 0) {
   return out;
 }
 
+// Свободное повторение: выученные карточки, слабые (короткий интервал, частые забывания) — в приоритете
+function practiceQueue(state, filter, size = 20) {
+  const pool = [];
+  for (const id in state.cards) {
+    const c = BY_ID[id];
+    if (!c) continue;
+    const st = state.cards[id];
+    if (filter === 'hard' ? !(st.l > 0 || st.e < 230 || st.i <= 1) : (filter !== 'all' && c.deck !== filter)) continue;
+    pool.push({ id, w: st.l * 3 + 10 / (st.i + 1) + Math.random() * 4 });
+  }
+  pool.sort((a, b) => b.w - a.w);
+  return shuffle(pool.slice(0, size).map(x => x.id));
+}
+
 function markStudied(state, today) {
   if (state.streak.last === today) return;
   state.streak.count = state.streak.last === today - 1 ? state.streak.count + 1 : 1;
@@ -316,6 +330,7 @@ function renderHome() {
     ${total ? `<button class="btn primary big" id="go">Начать занятие · ${total}</button>`
       : `<div class="done">На сегодня всё 🎉<div class="muted small">Возвращайся завтра — повторения уже запланированы.</div></div>
          <button class="btn big" id="more">Учить ещё 10 новых</button>`}
+    ${Object.keys(S.cards).length ? `<button class="btn big" id="practice">🔁 Повторить изученное</button>` : ''}
     <h3>Колоды</h3>
     ${rows}
     <button class="btn ghost" id="settings">Настройки</button>`;
@@ -323,6 +338,8 @@ function renderHome() {
   if (go) go.onclick = () => startSession(0);
   const more = document.getElementById('more');
   if (more) more.onclick = () => startSession(10);
+  const pr = document.getElementById('practice');
+  if (pr) pr.onclick = renderPracticePicker;
   document.getElementById('settings').onclick = renderSettings;
 }
 
@@ -331,6 +348,26 @@ function startSession(extra) {
   const queue = buildQueue(S, today, extra);
   if (!queue.length) { renderHome(); return; }
   session = { queue, pos: 0, today, answered: 0, correct: 0, revealed: false, initial: queue.length };
+  setBack(() => { Store.save(S, true); renderHome(); });
+  renderCard();
+}
+
+function renderPracticePicker() {
+  setBack(renderHome);
+  const hard = practiceQueue(S, 'hard', 1e9).length;
+  const opts = [{ key: 'all', name: 'Всё вперемешку', n: Object.keys(S.cards).length }];
+  if (hard) opts.push({ key: 'hard', name: 'Сложные карточки', n: hard });
+  for (const d of DECKS) { const n = introducedCount(S, d.key); if (n) opts.push({ key: d.key, name: d.name, n }); }
+  $app().innerHTML = `<h2>Повторить изученное</h2>
+    <p class="muted small">Свободная тренировка в любое время, до 20 карточек за раз. Расписание повторений не сдвигается, а если что-то забыл — карточка вернётся в ближайшие повторения.</p>
+    ${opts.map(o => `<button class="btn big pick" data-k="${o.key}"><span>${esc(o.name)}</span><span class="muted">${o.n}</span></button>`).join('')}`;
+  $app().querySelectorAll('.pick').forEach(b => b.onclick = () => startPractice(b.dataset.k));
+}
+
+function startPractice(filter) {
+  const queue = practiceQueue(S, filter);
+  if (!queue.length) { renderPracticePicker(); return; }
+  session = { queue, pos: 0, today: dayNumber(), answered: 0, correct: 0, revealed: false, practice: true };
   setBack(() => { Store.save(S, true); renderHome(); });
   renderCard();
 }
@@ -380,6 +417,11 @@ function renderCard() {
     const reveal = () => { s.revealed = true; renderCard(); };
     document.getElementById('show').onclick = reveal;
     document.getElementById('card').onclick = e => { if (e.target.id !== 'say') reveal(); };
+  } else if (s.practice) {
+    $app().innerHTML = `${head}<div class="card">${sound}${cardFront(c)}<div class="sep"></div>${cardBack(c)}</div>
+      <div class="actions grades two"><button class="btn grade g0" data-ok="0"><b>Не помню</b></button><button class="btn grade g2" data-ok="1"><b>Помню</b></button></div>`;
+    if (S.settings.tts) speak(speakText(c));
+    $app().querySelectorAll('.grade').forEach(b => b.onclick = () => answerPractice(b.dataset.ok === '1'));
   } else {
     const labels = ['Снова', 'Трудно', 'Хорошо', 'Легко'];
     const btns = labels.map((l, g) => `<button class="btn grade g${g}" data-g="${g}"><b>${l}</b><span>${fmtInterval(schedule(st, g, s.today))}</span></button>`).join('');
@@ -407,6 +449,21 @@ function answer(g) {
   markStudied(S, s.today);
   s.pos++; s.revealed = false;
   haptic(g === 0 ? 'heavy' : 'light');
+  Store.save(S);
+  renderCard();
+}
+
+// В тренировке интервалы не растут; забытая карточка ставится в повторения на сегодня
+function answerPractice(ok) {
+  const s = session, id = s.queue[s.pos], st = S.cards[id];
+  if (!ok) {
+    if (st.d > s.today) S.cards[id] = { ...st, d: s.today };
+    requeue(s, id);
+  }
+  s.answered++; if (ok) s.correct++;
+  markStudied(S, s.today);
+  s.pos++; s.revealed = false;
+  haptic(ok ? 'light' : 'heavy');
   Store.save(S);
   renderCard();
 }
@@ -475,4 +532,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };

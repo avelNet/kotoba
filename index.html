@@ -70,6 +70,9 @@
 
   .actions { display: flex; gap: 8px; }
   .grades { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .grades.two { grid-template-columns: 1fr 1fr; }
+  .grades.two .grade { padding: 16px 4px; font-size: 16px; }
+  .pick { display: flex; justify-content: space-between; text-align: left; }
   .grade { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 4px; font-size: 14px; }
   .grade span { font-size: 12px; font-weight: 500; opacity: .75; }
   .g0 { background: rgba(229, 72, 77, .16); color: #e5484d; }
