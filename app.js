@@ -354,10 +354,12 @@ function renderCard() {
   if (s.pos >= s.queue.length) return renderFinish();
   const id = s.queue[s.pos], c = BY_ID[id], st = S.cards[id];
   const deckName = DECKS.find(d => d.key === c.deck).name;
-  const left = s.queue.length - s.pos;
+  // Оставшиеся показы: всё, что в очереди, плюс будущая проверка для ещё не показанных новых карточек
+  const rest = s.queue.slice(s.pos);
+  const left = rest.length + new Set(rest.filter(x => !S.cards[x])).size;
   const isNew = !st;
-  const head = `<div class="progress"><div class="bar"><i style="width:${Math.min(100, s.answered / (s.answered + left) * 100).toFixed(1)}%"></i></div>
-    <div class="muted small row"><span>${esc(deckName)}${isNew ? ' · <b class="accent">новое</b>' : ''}</span><span>осталось ${left}</span></div></div>`;
+  const head = `<div class="progress"><div class="bar"><i style="width:${(s.pos / (s.pos + left) * 100).toFixed(1)}%"></i></div>
+    <div class="muted small row"><span>${esc(deckName)}${isNew ? ' · <b class="accent">новое</b>' : ''}</span><span>осталось ${left} ${plural(left, 'показ', 'показа', 'показов')}</span></div></div>`;
   const sound = S.settings.tts && speakText(c) ? `<button class="icon" id="say" aria-label="Озвучить">🔊</button>` : '';
 
   if (isNew) {
