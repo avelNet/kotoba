@@ -193,10 +193,13 @@ function metaOf(state, n) {
 }
 
 const Store = {
-  cloud: null, saved: [], timer: null,
+  cloud: null, saved: [], timer: null, chain: Promise.resolve(),
+  why: '', lastSync: 0, failed: false,
   init() {
     const tg = typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp;
-    if (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.9') && tg.CloudStorage) this.cloud = tg.CloudStorage;
+    if (!tg || !tg.initData) this.why = 'приложение открыто не через Telegram-бота';
+    else if (!tg.isVersionAtLeast || !tg.isVersionAtLeast('6.9') || !tg.CloudStorage) this.why = `старая версия Telegram (${tg.version}), обнови приложение`;
+    else this.cloud = tg.CloudStorage;
   },
   loadLocal() {
     try { return JSON.parse(localStorage.getItem('kotoba')); } catch (e) { return null; }
@@ -208,7 +211,7 @@ const Store = {
     return new Promise(resolve => {
       const t = setTimeout(() => resolve(null), 5000);
       try {
-        this.cloud[method](...args, (err, res) => { clearTimeout(t); resolve(err ? null : res); });
+        this.cloud[method](...args, (err, res) => { clearTimeout(t); resolve(err ? null : (res === undefined ? true : res)); });
       } catch (e) { clearTimeout(t); resolve(null); }
     });
   },
@@ -240,21 +243,43 @@ const Store = {
     this.saveLocal(state);
     if (!this.cloud) return;
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.flush(state), immediate ? 0 : 1500);
+    // Сохраняем почти сразу: мини-приложение могут закрыть в любой момент
+    this.timer = setTimeout(() => { this.chain = this.chain.then(() => this.flush(state)); }, immediate ? 0 : 250);
   },
   async flush(state) {
     const chunks = serializeChunks(state);
+    let ok = true;
     for (let k = 0; k < chunks.length; k++) {
-      if (chunks[k] !== this.saved[k]) await this.call('setItem', 'c' + k, chunks[k]);
+      if (chunks[k] === this.saved[k]) continue;
+      if (await this.call('setItem', 'c' + k, chunks[k])) this.saved[k] = chunks[k];
+      else ok = false;
     }
     if (this.saved.length > chunks.length) {
       const extra = []; for (let k = chunks.length; k < this.saved.length; k++) extra.push('c' + k);
-      await this.call('removeItems', extra);
+      if (await this.call('removeItems', extra)) this.saved.length = chunks.length;
     }
-    await this.call('setItem', 'm', metaOf(state, chunks.length));
-    this.saved = chunks;
+    // Метаданные пишем только если все куски записались, иначе облако останется в согласованном старом состоянии
+    if (ok && await this.call('setItem', 'm', metaOf(state, chunks.length))) {
+      this.failed = false; this.lastSync = Date.now();
+    } else {
+      this.failed = true;
+    }
+    updateSyncBadge();
   },
 };
+
+function syncText() {
+  if (!Store.cloud) return `⚠️ Прогресс только на этом устройстве: ${Store.why}`;
+  if (Store.failed) return '⚠️ Не удалось сохранить в облако, попробую ещё раз';
+  if (!Store.lastSync) return '☁️ Прогресс хранится в облаке Telegram';
+  const d = new Date(Store.lastSync);
+  return `☁️ Сохранено в облаке Telegram · ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function updateSyncBadge() {
+  if (typeof document === 'undefined') return;
+  const el = document.getElementById('sync');
+  if (el) { el.textContent = syncText(); el.classList.toggle('warn', !Store.cloud || Store.failed); }
+}
 
 /* ================= Озвучка ================= */
 
@@ -333,7 +358,9 @@ function renderHome() {
     ${Object.keys(S.cards).length ? `<button class="btn big" id="practice">🔁 Повторить изученное</button>` : ''}
     <h3>Колоды</h3>
     ${rows}
-    <button class="btn ghost" id="settings">Настройки</button>`;
+    <button class="btn ghost" id="settings">Настройки</button>
+    <div id="sync" class="muted small center"></div>`;
+  updateSyncBadge();
   const go = document.getElementById('go');
   if (go) go.onclick = () => startSession(0);
   const more = document.getElementById('more');
@@ -528,6 +555,7 @@ async function boot() {
   S = await Store.load();
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
+  window.addEventListener('pagehide', () => { if (S) Store.save(S, true); });
   renderHome();
 }
 
