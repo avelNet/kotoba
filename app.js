@@ -8,9 +8,19 @@ const DECKS = [
   { key: 'kata',  name: 'Катакана', needs: 'hira', defNew: 10 },
   { key: 'words', name: 'Слова',    needs: 'hira', defNew: 10 },
   { key: 'kanji', name: 'Кандзи',   needs: 'kata', defNew: 3 },
+  { key: 'mine',  name: 'Мои слова', needs: null,  defNew: 10 },
 ];
+DATA.mine = [];
 const BY_ID = {};
 for (const d of DECKS) for (const c of DATA[d.key]) BY_ID[c.id] = c;
+
+// Свои слова хранятся в состоянии как {id, k: кана, j: кандзи, r: перевод}
+function setCustom(list) {
+  for (const c of DATA.mine) delete BY_ID[c.id];
+  DATA.mine = (list || []).map(w => ({ id: w.id, deck: 'mine', front: w.k, kanji: w.j || '', ru: w.r }));
+  for (const c of DATA.mine) BY_ID[c.id] = c;
+}
+const cleanField = v => String(v || '').replace(/[\t\n\r|]+/g, ' ').trim();
 
 /* ================= Алгоритм повторений (упрощённый SM-2) ================= */
 
@@ -63,7 +73,7 @@ function freshState() {
   const newPerDay = {};
   for (const d of DECKS) newPerDay[d.key] = d.defNew;
   return {
-    v: 1, ts: 0, cards: {},
+    v: 1, ts: 0, cards: {}, custom: [],
     daily: { day: -1, new: {}, reviews: 0 },
     settings: { newPerDay, tts: true },
     streak: { last: -1, count: 0 },
@@ -75,6 +85,7 @@ function normalize(s) {
   if (!s || typeof s !== 'object' || typeof s.cards !== 'object') return f;
   return {
     v: 1, ts: s.ts || 0, cards: s.cards,
+    custom: Array.isArray(s.custom) ? s.custom.filter(w => w && w.id && w.k && w.r) : [],
     daily: { ...f.daily, ...(s.daily || {}) },
     settings: { ...f.settings, ...(s.settings || {}), newPerDay: { ...f.settings.newPerDay, ...((s.settings || {}).newPerDay || {}) } },
     streak: { ...f.streak, ...(s.streak || {}) },
@@ -189,13 +200,35 @@ function parseChunks(chunks) {
   }
   return cards;
 }
-function metaOf(state, n) {
-  const { cards, ...rest } = state;
-  return JSON.stringify({ ...rest, n });
+function metaOf(state, n, nu = 0) {
+  const { cards, custom, ...rest } = state;
+  return JSON.stringify({ ...rest, n, nu });
+}
+// Свои слова — отдельными кусками до ~3500 символов
+function serializeCustom(state) {
+  const out = []; let cur = '';
+  for (const w of state.custom || []) {
+    const line = [w.id, w.k, w.j || '', w.r].map(cleanField).join('\t');
+    if (cur && cur.length + line.length + 1 > 3500) { out.push(cur); cur = ''; }
+    cur = cur ? cur + '\n' + line : line;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+function parseCustom(chunks) {
+  const list = [];
+  for (const ch of chunks) {
+    if (!ch) continue;
+    for (const line of ch.split('\n')) {
+      const p = line.split('\t');
+      if (p.length === 4 && p[0] && p[1] && p[3]) list.push({ id: p[0], k: p[1], j: p[2], r: p[3] });
+    }
+  }
+  return list;
 }
 
 const Store = {
-  cloud: null, saved: [], timer: null, chain: Promise.resolve(),
+  cloud: null, saved: [], savedU: [], timer: null, chain: Promise.resolve(),
   why: '', lastSync: 0, failed: false,
   init() {
     const tg = typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp;
@@ -223,15 +256,18 @@ const Store = {
     if (!raw) return null;
     let meta; try { meta = JSON.parse(raw); } catch (e) { return null; }
     const keys = Array.from({ length: meta.n || 0 }, (_, k) => 'c' + k);
-    let chunks = [];
-    if (keys.length) {
-      const res = await this.call('getItems', keys);
+    const ukeys = Array.from({ length: meta.nu || 0 }, (_, k) => 'u' + k);
+    let chunks = [], uchunks = [];
+    if (keys.length + ukeys.length) {
+      const res = await this.call('getItems', [...keys, ...ukeys]);
       if (!res) return null;
       chunks = keys.map(k => res[k] || '');
+      uchunks = ukeys.map(k => res[k] || '');
     }
     this.saved = chunks.slice();
-    const { n, ...rest } = meta;
-    return { ...rest, cards: parseChunks(chunks) };
+    this.savedU = uchunks.slice();
+    const { n, nu, ...rest } = meta;
+    return { ...rest, cards: parseChunks(chunks), custom: parseCustom(uchunks) };
   },
   async load() {
     this.init();
@@ -260,8 +296,18 @@ const Store = {
       const extra = []; for (let k = chunks.length; k < this.saved.length; k++) extra.push('c' + k);
       if (await this.call('removeItems', extra)) this.saved.length = chunks.length;
     }
+    const uchunks = serializeCustom(state);
+    for (let k = 0; k < uchunks.length; k++) {
+      if (uchunks[k] === this.savedU[k]) continue;
+      if (await this.call('setItem', 'u' + k, uchunks[k])) this.savedU[k] = uchunks[k];
+      else ok = false;
+    }
+    if (this.savedU.length > uchunks.length) {
+      const extra = []; for (let k = uchunks.length; k < this.savedU.length; k++) extra.push('u' + k);
+      if (await this.call('removeItems', extra)) this.savedU.length = uchunks.length;
+    }
     // Метаданные пишем только если все куски записались, иначе облако останется в согласованном старом состоянии
-    if (ok && await this.call('setItem', 'm', metaOf(state, chunks.length))) {
+    if (ok && await this.call('setItem', 'm', metaOf(state, chunks.length, uchunks.length))) {
       this.failed = false; this.lastSync = Date.now();
     } else {
       this.failed = true;
@@ -352,13 +398,14 @@ function renderHome() {
     const nw = newAvailable(S, d).length; newAll += nw;
     const unlocked = deckUnlocked(S, d);
     const needName = d.needs ? DECKS.find(x => x.key === d.needs).name : '';
-    const status = !unlocked ? `🔒 после «${esc(needName)}»`
+    const status = d.key === 'mine' && !total ? 'добавь свои слова во вкладке «Словарь»'
+      : !unlocked ? `🔒 после «${esc(needName)}»`
       : intro === total ? `пройдено, повторений: ${due}`
       : `новых: ${nw} · повторить: ${due}`;
     const playable = unlocked && (due + nw) > 0;
     return `<div class="deck${unlocked ? '' : ' locked'}${playable ? ' playable' : ''}" data-k="${d.key}">
       <div class="deck-top"><b>${esc(d.name)}</b><span class="muted">${intro}/${total}</span></div>
-      <div class="bar"><i style="width:${(intro / total * 100).toFixed(1)}%"></i></div>
+      <div class="bar"><i style="width:${total ? (intro / total * 100).toFixed(1) : 0}%"></i></div>
       <div class="muted small">${status}${playable ? ' · <span class="accent">учить только её ▶</span>' : ''}</div></div>`;
   }).join('');
   const tomorrow = dueIds(S, today + 1).length;
@@ -424,11 +471,11 @@ function startPractice(filter) {
 }
 
 function cardFront(c) {
-  return `<div class="front ${c.deck === 'words' ? 'word' : ''}">${esc(c.front)}</div>`;
+  return `<div class="front ${c.deck === 'words' || c.deck === 'mine' ? 'word' : ''}">${esc(c.front)}</div>`;
 }
 function cardBack(c) {
   if (c.deck === 'hira' || c.deck === 'kata') return `<div class="answer">${esc(c.romaji)}</div>`;
-  if (c.deck === 'words') return `<div class="answer">${esc(c.ru)}</div>${c.kanji ? `<div class="kanji-form">${esc(c.kanji)}</div>` : ''}`;
+  if (c.deck === 'words' || c.deck === 'mine') return `<div class="answer">${esc(c.ru)}</div>${c.kanji ? `<div class="kanji-form">${esc(c.kanji)}</div>` : ''}`;
   const ex = DATA.words.filter(w => w.kanji && w.kanji.includes(c.front)).slice(0, 3)
     .map(w => `<div class="ex"><span class="jp">${esc(w.kanji)}</span> <span class="muted">${esc(w.front)}</span> — ${esc(w.ru)}</div>`).join('');
   return `<div class="answer">${esc(c.ru)}</div>
@@ -540,36 +587,100 @@ function strength(i) { return i >= 21 ? 4 : i >= 7 ? 3 : i >= LEARNED_DAYS ? 2 :
 function renderDict() {
   setBack(null);
   setTabs('dict');
-  const all = DATA.words.filter(w => S.cards[w.id]).reverse();
+  const all = [...DATA.words, ...DATA.mine].filter(w => S.cards[w.id]).reverse();
   const learned = all.filter(w => S.cards[w.id].i >= LEARNED_DAYS);
   const learning = all.filter(w => S.cards[w.id].i < LEARNED_DAYS);
-  const lists = { learned, learning, all };
-  const segs = [['learned', 'Выучено', learned.length], ['learning', 'Учу', learning.length], ['all', 'Все', all.length]];
+  const mine = DATA.mine.slice().reverse();
+  const lists = { learned, learning, all, mine };
+  const segs = [['learned', 'Выучено', learned.length], ['learning', 'Учу', learning.length], ['all', 'Все', all.length], ['mine', 'Мои', mine.length]];
   $app().innerHTML = `<h2>Словарь</h2>
-    <p class="muted small">Слова из Котобы. «Выучено» — те, что ты вспомнил несколько раз подряд и повторяешь раз в ${LEARNED_DAYS}+ дня. Нажми на слово, чтобы услышать его.</p>
+    <p class="muted small">«Выучено» — слова, которые ты вспомнил несколько раз подряд и повторяешь раз в ${LEARNED_DAYS}+ дня. Нажми на слово, чтобы услышать его.</p>
     <div class="seg" id="dseg">${segs.map(([k, l, n]) => `<button data-f="${k}" aria-pressed="${dictState.filter === k}">${l} <span class="muted">${n}</span></button>`).join('')}</div>
+    <div id="dadd"></div>
     <input type="search" id="dq" class="search" placeholder="Поиск: кана, кандзи или перевод" value="${esc(dictState.q)}">
     <div id="dlist"></div>`;
+  const drawAdd = () => {
+    const box = document.getElementById('dadd');
+    if (dictState.filter !== 'mine') { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="addbox">
+      <div class="addrow"><input id="ak" class="search" placeholder="Кана: えんぴつ" autocomplete="off"><input id="ar" class="search" placeholder="Перевод: карандаш" autocomplete="off"></div>
+      <input id="aj" class="search" placeholder="Кандзи (необязательно): 鉛筆" autocomplete="off">
+      <button class="btn primary big" id="aadd">Добавить слово</button>
+      <details class="bulk"><summary>Вставить списком</summary>
+        <p class="muted small">Каждое слово с новой строки: <b>кана|перевод|кандзи</b>. Кандзи можно не писать.</p>
+        <textarea id="abulk" rows="5" placeholder="えんぴつ|карандаш|鉛筆&#10;すごい|круто"></textarea>
+        <button class="btn big" id="abulkadd">Добавить список</button>
+      </details>
+      <p class="muted small" id="amsg" aria-live="polite"></p></div>`;
+    const msg = t => { document.getElementById('amsg').textContent = t; };
+    document.getElementById('aadd').onclick = () => {
+      const r = addWords([[document.getElementById('ak').value, document.getElementById('ar').value, document.getElementById('aj').value]]);
+      if (r.added + r.pulled) { renderDict(); msg2(r); } else msg(r.note || 'Нужно заполнить кану и перевод');
+    };
+    document.getElementById('abulkadd').onclick = () => {
+      const rows = document.getElementById('abulk').value.split('\n').map(l => l.split('|')).filter(p => p.join('').trim());
+      if (!rows.length) { msg('Список пуст'); return; }
+      const r = addWords(rows);
+      renderDict(); msg2(r);
+    };
+  };
+  const msg2 = r => {
+    const parts = [];
+    if (r.added) parts.push(`добавлено: ${r.added}`);
+    if (r.pulled) parts.push(`уже были в колоде «Слова», поставил в изучение: ${r.pulled}`);
+    if (r.skipped) parts.push(`пропущено (уже учишь или пустые строки): ${r.skipped}`);
+    const el = document.getElementById('amsg'); if (el) el.textContent = parts.join(' · ');
+    haptic('light');
+  };
   const draw = () => {
     const q = dictState.q.trim().toLowerCase();
     const items = lists[dictState.filter].filter(w => !q || [w.front, w.kanji, w.ru].join(' ').toLowerCase().includes(q));
+    const isMine = dictState.filter === 'mine';
     document.getElementById('dlist').innerHTML = items.length
       ? `<div class="dict">${items.map(w => {
-          const st = strength(S.cards[w.id].i);
-          return `<button class="drow" data-say="${esc(w.front)}"><span class="dk"><span class="dkana">${esc(w.front)}</span>${w.kanji ? `<span class="dkanji">${esc(w.kanji)}</span>` : ''}</span>
-            <span class="dru">${esc(w.ru)}</span><span class="dots" title="Прочность запоминания">${'●'.repeat(st)}${'○'.repeat(4 - st)}</span></button>`;
+          const st = S.cards[w.id] ? strength(S.cards[w.id].i) : 0;
+          return `<div class="drow${isMine ? ' mine' : ''}" data-say="${esc(w.front)}" role="button" tabindex="0"><span class="dk"><span class="dkana">${esc(w.front)}</span>${w.kanji ? `<span class="dkanji">${esc(w.kanji)}</span>` : ''}</span>
+            <span class="dru">${esc(w.ru)}</span><span class="dots" title="Прочность запоминания">${S.cards[w.id] ? '●'.repeat(st) + '○'.repeat(4 - st) : 'новое'}</span>
+            ${isMine ? `<button class="ddel" data-id="${esc(w.id)}" aria-label="Удалить">✕</button>` : ''}</div>`;
         }).join('')}</div>`
-      : `<div class="done muted">${q ? 'Ничего не найдено' : dictState.filter === 'learned' ? 'Пока пусто. Слово попадёт сюда, когда ты несколько раз подряд вспомнишь его в повторениях.' : 'Пока пусто. Начни учить колоду «Слова» на главной.'}</div>`;
-    document.querySelectorAll('.drow').forEach(b => b.onclick = () => speak(b.dataset.say));
+      : `<div class="done muted">${q ? 'Ничего не найдено' : dictState.filter === 'learned' ? 'Пока пусто. Слово попадёт сюда, когда ты несколько раз подряд вспомнишь его в повторениях.' : isMine ? 'Своих слов пока нет. Добавь первое выше.' : 'Пока пусто. Начни учить колоду «Слова» на главной.'}</div>`;
+    document.querySelectorAll('.drow').forEach(b => b.onclick = e => { if (!e.target.closest('.ddel')) speak(b.dataset.say); });
+    document.querySelectorAll('.ddel').forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Удалить?'; return; }
+      S.custom = S.custom.filter(w => w.id !== b.dataset.id);
+      delete S.cards[b.dataset.id];
+      setCustom(S.custom); Store.save(S, true); renderDict();
+    });
   };
   document.getElementById('dseg').onclick = e => {
     const b = e.target.closest('button'); if (!b) return;
     dictState.filter = b.dataset.f;
     document.querySelectorAll('#dseg button').forEach(x => x.setAttribute('aria-pressed', x === b));
-    draw();
+    drawAdd(); draw();
   };
   document.getElementById('dq').oninput = e => { dictState.q = e.target.value; draw(); };
-  draw();
+  drawAdd(); draw();
+}
+
+// Добавление своих слов: rows = [[кана, перевод, кандзи], ...]
+function addWords(rows) {
+  const today = dayNumber();
+  const res = { added: 0, pulled: 0, skipped: 0 };
+  for (const row of rows) {
+    const k = cleanField(row[0]), r = cleanField(row[1]), j = cleanField(row[2]);
+    if (!k || !r) { res.skipped++; continue; }
+    const built = DATA.words.find(w => w.front === k);
+    if (built) {
+      if (S.cards[built.id]) { res.skipped++; continue; }
+      S.cards[built.id] = newCardState(today); res.pulled++; continue;
+    }
+    if (S.custom.some(w => w.k === k && w.r.toLowerCase() === r.toLowerCase())) { res.skipped++; continue; }
+    S.custom.push({ id: 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), k, j, r });
+    res.added++;
+  }
+  if (res.added + res.pulled) { setCustom(S.custom); Store.save(S, true); }
+  return res;
 }
 
 function renderSettings() {
@@ -620,11 +731,11 @@ function renderSettings() {
     let parsed; try { parsed = JSON.parse(ta.value); } catch (e) { alert('Не получилось прочитать копию'); return; }
     if (!parsed || typeof parsed.cards !== 'object') { alert('Это не похоже на копию прогресса'); return; }
     if (!confirm('Заменить текущий прогресс этой копией?')) return;
-    S = normalize(parsed); Store.save(S, true); renderHome();
+    S = normalize(parsed); setCustom(S.custom); Store.save(S, true); renderHome();
   };
   document.getElementById('reset').onclick = () => {
     if (!confirm('Точно стереть весь прогресс? Это нельзя отменить.')) return;
-    S = freshState(); Store.save(S, true); renderHome();
+    S = freshState(); setCustom(S.custom); Store.save(S, true); renderHome();
   };
 }
 
@@ -635,6 +746,7 @@ async function boot() {
     try { if (tg.isVersionAtLeast('7.7')) tg.disableVerticalSwipes(); } catch (e) {}
   }
   S = await Store.load();
+  setCustom(S.custom);
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
   window.addEventListener('pagehide', () => { if (S) Store.save(S, true); });
@@ -649,4 +761,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };

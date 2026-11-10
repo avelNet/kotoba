@@ -111,6 +111,16 @@
   .dkanji { font-size: 13px; color: var(--muted); font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
   .dru { font-size: 14px; min-width: 0; }
   .dots { font-size: 10px; letter-spacing: 1px; color: var(--accent); white-space: nowrap; }
+  .seg button { font-size: 13px; padding: 9px 2px; }
+  .addbox { display: flex; flex-direction: column; gap: 8px; background: var(--card); border-radius: 14px; padding: 12px; }
+  .addbox .search { background: var(--bg); }
+  .addrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .bulk summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; padding: 4px 0; }
+  .bulk[open] { display: flex; flex-direction: column; gap: 8px; }
+  .bulk textarea { font: 16px inherit; font-family: inherit; background: var(--bg); }
+  .drow.mine { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto auto; }
+  .ddel { appearance: none; border: 0; background: none; color: var(--muted); font: 600 14px inherit; font-family: inherit; padding: 6px; cursor: pointer; }
+  .ddel.armed { color: #e5484d; }
   .loading { flex: 1; display: grid; place-items: center; color: var(--muted); }
 </style>
 </head>
@@ -121,7 +131,7 @@
   <button data-tab="dict"><span class="ti">辞</span><span>Словарь</span></button>
   <button data-tab="settings"><span class="ti">⚙︎</span><span>Настройки</span></button>
 </nav>
-<script src="data.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="data.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
