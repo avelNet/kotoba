@@ -510,11 +510,23 @@ function renderFinish() {
 }
 
 function renderSettings() {
-  setBack(renderHome);
+  const MAX_NEW = 400;
+  // Сохраняем значения полей при любом выходе: на iOS событие change не срабатывает, если не убрать фокус
+  const commit = () => {
+    $app().querySelectorAll('input[data-k]').forEach(inp => {
+      const v = Math.max(0, Math.min(MAX_NEW, parseInt(inp.value, 10) || 0));
+      S.settings.newPerDay[inp.dataset.k] = v;
+    });
+    Store.save(S, true);
+  };
+  const leave = () => { commit(); renderHome(); };
+  setBack(leave);
   const inputs = DECKS.map(d => `<label class="set-row"><span>${esc(d.name)}: новых в день</span>
-    <input type="number" min="0" max="50" inputmode="numeric" data-k="${d.key}" value="${S.settings.newPerDay[d.key]}"></label>`).join('');
+    <input type="number" min="0" max="${MAX_NEW}" inputmode="numeric" data-k="${d.key}" value="${S.settings.newPerDay[d.key]}"></label>`).join('');
   $app().innerHTML = `<h2>Настройки</h2>
     ${inputs}
+    <button class="btn primary big" id="save">Сохранить</button>
+    <p class="muted small" id="saved" hidden>Сохранено ✓</p>
     <label class="set-row"><span>Озвучивать карточки</span><input type="checkbox" id="tts" ${S.settings.tts ? 'checked' : ''}></label>
     <p class="muted small">Колоды открываются по очереди: катакана и слова — после всей хираганы, кандзи — после всей катаканы. Слова на катакане появятся, когда пройдёшь катакану.</p>
     <h3>Резервная копия</h3>
@@ -524,10 +536,16 @@ function renderSettings() {
     <h3>Опасная зона</h3>
     <button class="btn danger" id="reset">Сбросить весь прогресс</button>
     <p class="muted small center">Котоба · ${Object.keys(S.cards).length} карточек в изучении</p>`;
-  $app().querySelectorAll('input[data-k]').forEach(inp => inp.onchange = () => {
-    const v = Math.max(0, Math.min(50, parseInt(inp.value, 10) || 0));
-    inp.value = v; S.settings.newPerDay[inp.dataset.k] = v; Store.save(S);
+  $app().querySelectorAll('input[data-k]').forEach(inp => {
+    inp.oninput = commit;
+    inp.onblur = () => { inp.value = S.settings.newPerDay[inp.dataset.k]; };
   });
+  document.getElementById('save').onclick = () => {
+    commit();
+    const s = document.getElementById('saved'); s.hidden = false;
+    haptic('light');
+    setTimeout(renderHome, 500);
+  };
   document.getElementById('tts').onchange = e => { S.settings.tts = e.target.checked; Store.save(S); };
   const ta = document.getElementById('backup');
   document.getElementById('export').onclick = () => {
