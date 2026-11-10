@@ -89,12 +89,39 @@
   .set-row input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
   textarea { width: 100%; font: 12px ui-monospace, monospace; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
   #sync.warn { color: #d68512; }
+  body.has-tabs #app { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  #tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, 1fr);
+    background: var(--bg); border-top: 1px solid var(--line); padding: 6px 8px calc(8px + env(safe-area-inset-bottom)); }
+  #tabs[hidden] { display: none; }
+  #tabs button { appearance: none; border: 0; background: none; color: var(--muted); font: 600 11px/1.2 inherit; font-family: inherit;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0; cursor: pointer; }
+  #tabs .ti { font-size: 20px; line-height: 1.1; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  #tabs button[aria-current="page"] { color: var(--accent); }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--card); border-radius: 12px; padding: 4px; gap: 4px; }
+  .seg button { appearance: none; border: 0; border-radius: 9px; padding: 9px 6px; background: none; color: var(--text); font: 600 14px inherit; font-family: inherit; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--bg); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .search { width: 100%; font: 16px inherit; font-family: inherit; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  .dict { display: flex; flex-direction: column; background: var(--card); border-radius: 14px; overflow: hidden; }
+  .drow { appearance: none; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+    display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 11px 14px; }
+  .drow + .drow { border-top: 1px solid var(--line); }
+  .drow:active { background: var(--line); }
+  .dk { display: flex; flex-direction: column; min-width: 0; }
+  .dkana { font-size: 20px; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  .dkanji { font-size: 13px; color: var(--muted); font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  .dru { font-size: 14px; min-width: 0; }
+  .dots { font-size: 10px; letter-spacing: 1px; color: var(--accent); white-space: nowrap; }
   .loading { flex: 1; display: grid; place-items: center; color: var(--muted); }
 </style>
 </head>
 <body>
 <div id="app"><div class="loading">読み込み中…</div></div>
-<script src="data.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<nav id="tabs" hidden>
+  <button data-tab="home" aria-current="page"><span class="ti">家</span><span>Главная</span></button>
+  <button data-tab="dict"><span class="ti">辞</span><span>Словарь</span></button>
+  <button data-tab="settings"><span class="ti">⚙︎</span><span>Настройки</span></button>
+</nav>
+<script src="data.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

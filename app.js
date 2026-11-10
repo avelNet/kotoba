@@ -314,6 +314,24 @@ function setBack(fn) {
   else { setBack._h = null; tg.BackButton.hide(); }
 }
 
+// Нижняя панель вкладок: показывается на главной, в словаре и настройках, прячется во время занятия
+let currentTab = 'home';
+function setTabs(active) {
+  const nav = document.getElementById('tabs');
+  if (!nav) return;
+  document.body.classList.toggle('has-tabs', !!active);
+  nav.hidden = !active;
+  if (!active) return;
+  currentTab = active;
+  nav.querySelectorAll('button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === active ? 'page' : 'false'));
+}
+function openTab(tab) {
+  if (tab === 'dict') renderDict();
+  else if (tab === 'settings') renderSettings();
+  else renderHome();
+  window.scrollTo(0, 0);
+}
+
 function plural(n, one, few, many) {
   const m10 = n % 10, m100 = n % 100;
   if (m10 === 1 && m100 !== 11) return one;
@@ -323,6 +341,7 @@ function plural(n, one, few, many) {
 
 function renderHome() {
   setBack(null);
+  setTabs('home');
   const today = dayNumber();
   rollDay(S, today);
   const dueAll = dueIds(S, today).length;
@@ -361,7 +380,6 @@ function renderHome() {
     ${Object.keys(S.cards).length ? `<button class="btn big" id="practice">🔁 Повторить изученное</button>` : ''}
     <h3>Колоды</h3>
     ${rows}
-    <button class="btn ghost" id="settings">Настройки</button>
     <div id="sync" class="muted small center"></div>`;
   updateSyncBadge();
   const go = document.getElementById('go');
@@ -371,7 +389,6 @@ function renderHome() {
   $app().querySelectorAll('.deck.playable').forEach(el => el.onclick = () => startSession(0, el.dataset.k));
   const pr = document.getElementById('practice');
   if (pr) pr.onclick = renderPracticePicker;
-  document.getElementById('settings').onclick = renderSettings;
 }
 
 function startSession(extra, onlyDeck = null) {
@@ -379,11 +396,13 @@ function startSession(extra, onlyDeck = null) {
   const queue = buildQueue(S, today, extra, onlyDeck);
   if (!queue.length) { renderHome(); return; }
   session = { queue, pos: 0, today, answered: 0, correct: 0, revealed: false, initial: queue.length };
+  setTabs(null);
   setBack(() => { Store.save(S, true); renderHome(); });
   renderCard();
 }
 
 function renderPracticePicker() {
+  setTabs(null);
   setBack(renderHome);
   const hard = practiceQueue(S, 'hard', 1e9).length;
   const opts = [{ key: 'all', name: 'Всё вперемешку', n: Object.keys(S.cards).length }];
@@ -399,6 +418,7 @@ function startPractice(filter) {
   const queue = practiceQueue(S, filter);
   if (!queue.length) { renderPracticePicker(); return; }
   session = { queue, pos: 0, today: dayNumber(), answered: 0, correct: 0, revealed: false, practice: true };
+  setTabs(null);
   setBack(() => { Store.save(S, true); renderHome(); });
   renderCard();
 }
@@ -513,6 +533,45 @@ function renderFinish() {
   document.getElementById('home').onclick = renderHome;
 }
 
+// Словарь: слова, которые уже в изучении. «Выучено» — интервал повторения от 3 дней (вспомнил минимум дважды подряд)
+const LEARNED_DAYS = 3;
+let dictState = { filter: 'learned', q: '' };
+function strength(i) { return i >= 21 ? 4 : i >= 7 ? 3 : i >= LEARNED_DAYS ? 2 : i >= 1 ? 1 : 0; }
+function renderDict() {
+  setBack(null);
+  setTabs('dict');
+  const all = DATA.words.filter(w => S.cards[w.id]).reverse();
+  const learned = all.filter(w => S.cards[w.id].i >= LEARNED_DAYS);
+  const learning = all.filter(w => S.cards[w.id].i < LEARNED_DAYS);
+  const lists = { learned, learning, all };
+  const segs = [['learned', 'Выучено', learned.length], ['learning', 'Учу', learning.length], ['all', 'Все', all.length]];
+  $app().innerHTML = `<h2>Словарь</h2>
+    <p class="muted small">Слова из Котобы. «Выучено» — те, что ты вспомнил несколько раз подряд и повторяешь раз в ${LEARNED_DAYS}+ дня. Нажми на слово, чтобы услышать его.</p>
+    <div class="seg" id="dseg">${segs.map(([k, l, n]) => `<button data-f="${k}" aria-pressed="${dictState.filter === k}">${l} <span class="muted">${n}</span></button>`).join('')}</div>
+    <input type="search" id="dq" class="search" placeholder="Поиск: кана, кандзи или перевод" value="${esc(dictState.q)}">
+    <div id="dlist"></div>`;
+  const draw = () => {
+    const q = dictState.q.trim().toLowerCase();
+    const items = lists[dictState.filter].filter(w => !q || [w.front, w.kanji, w.ru].join(' ').toLowerCase().includes(q));
+    document.getElementById('dlist').innerHTML = items.length
+      ? `<div class="dict">${items.map(w => {
+          const st = strength(S.cards[w.id].i);
+          return `<button class="drow" data-say="${esc(w.front)}"><span class="dk"><span class="dkana">${esc(w.front)}</span>${w.kanji ? `<span class="dkanji">${esc(w.kanji)}</span>` : ''}</span>
+            <span class="dru">${esc(w.ru)}</span><span class="dots" title="Прочность запоминания">${'●'.repeat(st)}${'○'.repeat(4 - st)}</span></button>`;
+        }).join('')}</div>`
+      : `<div class="done muted">${q ? 'Ничего не найдено' : dictState.filter === 'learned' ? 'Пока пусто. Слово попадёт сюда, когда ты несколько раз подряд вспомнишь его в повторениях.' : 'Пока пусто. Начни учить колоду «Слова» на главной.'}</div>`;
+    document.querySelectorAll('.drow').forEach(b => b.onclick = () => speak(b.dataset.say));
+  };
+  document.getElementById('dseg').onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    dictState.filter = b.dataset.f;
+    document.querySelectorAll('#dseg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    draw();
+  };
+  document.getElementById('dq').oninput = e => { dictState.q = e.target.value; draw(); };
+  draw();
+}
+
 function renderSettings() {
   const MAX_NEW = 400;
   // Сохраняем значения полей при любом выходе: на iOS событие change не срабатывает, если не убрать фокус
@@ -523,8 +582,9 @@ function renderSettings() {
     });
     Store.save(S, true);
   };
-  const leave = () => { commit(); renderHome(); };
-  setBack(leave);
+  setBack(null);
+  setTabs('settings');
+  renderSettings.commit = commit;
   const inputs = DECKS.map(d => `<label class="set-row"><span>${esc(d.name)}: новых в день</span>
     <input type="number" min="0" max="${MAX_NEW}" inputmode="numeric" data-k="${d.key}" value="${S.settings.newPerDay[d.key]}"></label>`).join('');
   $app().innerHTML = `<h2>Настройки</h2>
@@ -548,7 +608,7 @@ function renderSettings() {
     commit();
     const s = document.getElementById('saved'); s.hidden = false;
     haptic('light');
-    setTimeout(renderHome, 500);
+    setTimeout(() => { s.hidden = true; }, 1500);
   };
   document.getElementById('tts').onchange = e => { S.settings.tts = e.target.checked; Store.save(S); };
   const ta = document.getElementById('backup');
@@ -578,6 +638,13 @@ async function boot() {
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
   window.addEventListener('pagehide', () => { if (S) Store.save(S, true); });
+  const nav = document.getElementById('tabs');
+  if (nav) nav.onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (currentTab === 'settings' && renderSettings.commit) renderSettings.commit();
+    haptic('light');
+    openTab(b.dataset.tab);
+  };
   renderHome();
 }
 
