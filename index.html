@@ -49,6 +49,8 @@
 
   .deck { background: var(--card); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
   .deck.locked { opacity: .55; }
+  .deck.playable { cursor: pointer; }
+  .deck.playable:active { transform: scale(.99); }
   .deck-top { display: flex; justify-content: space-between; }
   .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }

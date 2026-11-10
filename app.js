@@ -123,11 +123,13 @@ function shuffle(a) {
   return a;
 }
 
-function buildQueue(state, today, extra = 0) {
+function buildQueue(state, today, extra = 0, onlyDeck = null) {
   rollDay(state, today);
-  const due = shuffle(dueIds(state, today));
+  const due = shuffle(dueIds(state, today, onlyDeck));
+  // новые карточки разных колод чередуем по очереди: кана, слово, кана, слово…
+  const perDeck = DECKS.filter(d => !onlyDeck || d.key === onlyDeck).map(d => newAvailable(state, d, extra));
   const news = [];
-  for (const d of DECKS) news.push(...newAvailable(state, d, extra));
+  for (let i = 0; perDeck.some(l => i < l.length); i++) for (const l of perDeck) if (i < l.length) news.push(l[i]);
   if (!due.length) return news;
   if (!news.length) return due;
   // равномерно перемешиваем новые с повторениями, сохраняя порядок новых
@@ -334,10 +336,11 @@ function renderHome() {
     const status = !unlocked ? `🔒 после «${esc(needName)}»`
       : intro === total ? `пройдено, повторений: ${due}`
       : `новых: ${nw} · повторить: ${due}`;
-    return `<div class="deck${unlocked ? '' : ' locked'}">
+    const playable = unlocked && (due + nw) > 0;
+    return `<div class="deck${unlocked ? '' : ' locked'}${playable ? ' playable' : ''}" data-k="${d.key}">
       <div class="deck-top"><b>${esc(d.name)}</b><span class="muted">${intro}/${total}</span></div>
       <div class="bar"><i style="width:${(intro / total * 100).toFixed(1)}%"></i></div>
-      <div class="muted small">${status}</div></div>`;
+      <div class="muted small">${status}${playable ? ' · <span class="accent">учить только её ▶</span>' : ''}</div></div>`;
   }).join('');
   const tomorrow = dueIds(S, today + 1).length;
   const streak = S.streak.last >= today - 1 ? S.streak.count : 0;
@@ -365,14 +368,15 @@ function renderHome() {
   if (go) go.onclick = () => startSession(0);
   const more = document.getElementById('more');
   if (more) more.onclick = () => startSession(10);
+  $app().querySelectorAll('.deck.playable').forEach(el => el.onclick = () => startSession(0, el.dataset.k));
   const pr = document.getElementById('practice');
   if (pr) pr.onclick = renderPracticePicker;
   document.getElementById('settings').onclick = renderSettings;
 }
 
-function startSession(extra) {
+function startSession(extra, onlyDeck = null) {
   const today = dayNumber();
-  const queue = buildQueue(S, today, extra);
+  const queue = buildQueue(S, today, extra, onlyDeck);
   if (!queue.length) { renderHome(); return; }
   session = { queue, pos: 0, today, answered: 0, correct: 0, revealed: false, initial: queue.length };
   setBack(() => { Store.save(S, true); renderHome(); });
