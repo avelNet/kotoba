@@ -676,7 +676,9 @@ function addWords(rows) {
       S.cards[built.id] = newCardState(today); res.pulled++; continue;
     }
     if (S.custom.some(w => w.k === k && w.r.toLowerCase() === r.toLowerCase())) { res.skipped++; continue; }
-    S.custom.push({ id: 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), k, j, r });
+    const id = 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    S.custom.push({ id, k, j, r });
+    S.cards[id] = newCardState(today); // свои слова сразу идут в изучение и повторения
     res.added++;
   }
   if (res.added + res.pulled) { setCustom(S.custom); Store.save(S, true); }
@@ -747,6 +749,10 @@ async function boot() {
   }
   S = await Store.load();
   setCustom(S.custom);
+  // свои слова, добавленные раньше, тоже ставим в изучение
+  let pulled = false;
+  for (const c of DATA.mine) if (!S.cards[c.id]) { S.cards[c.id] = newCardState(dayNumber()); pulled = true; }
+  if (pulled) Store.save(S, true);
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
   window.addEventListener('pagehide', () => { if (S) Store.save(S, true); });
