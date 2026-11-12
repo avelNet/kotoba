@@ -90,7 +90,7 @@
   textarea { width: 100%; font: 12px ui-monospace, monospace; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
   #sync.warn { color: #d68512; }
   body.has-tabs #app { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
-  #tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, 1fr);
+  #tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(4, 1fr);
     background: var(--bg); border-top: 1px solid var(--line); padding: 6px 8px calc(8px + env(safe-area-inset-bottom)); }
   #tabs[hidden] { display: none; }
   #tabs button { appearance: none; border: 0; background: none; color: var(--muted); font: 600 11px/1.2 inherit; font-family: inherit;
@@ -121,6 +121,25 @@
   .drow.mine { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto auto; }
   .ddel { appearance: none; border: 0; background: none; color: var(--muted); font: 600 14px inherit; font-family: inherit; padding: 6px; cursor: pointer; }
   .ddel.armed { color: #e5484d; }
+  .pstats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .num.sm { font-size: 22px; }
+  .ptotal { display: flex; justify-content: space-between; align-items: baseline; background: var(--card); border-radius: 14px; padding: 14px; }
+  .ptotal b { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .chart { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; background: var(--card); border-radius: 14px; padding: 14px 10px 10px; }
+  .chart .col { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .chart .bars { height: 110px; width: 100%; max-width: 28px; display: flex; flex-direction: column-reverse; border-radius: 6px; background: var(--line); overflow: hidden; }
+  .chart .bars i { display: block; width: 100%; }
+  .chart i.a, .legend i.a { background: var(--accent); }
+  .chart i.m, .legend i.m { background: #4a6fe0; }
+  .chart .v { font-size: 11px; font-variant-numeric: tabular-nums; min-height: 14px; }
+  .chart .col.today .muted { color: var(--accent); font-weight: 700; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .addtime { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .addtime .btn { padding: 12px 4px; }
+  .row.gap .search { flex: 1; min-width: 0; }
+  .linkbtn { appearance: none; border: 0; background: none; color: var(--accent); font: inherit; padding: 0; cursor: pointer; text-decoration: underline; }
+  .pcounts { display: flex; flex-direction: column; gap: 6px; }
   .loading { flex: 1; display: grid; place-items: center; color: var(--muted); }
 </style>
 </head>
@@ -129,9 +148,10 @@
 <nav id="tabs" hidden>
   <button data-tab="home" aria-current="page"><span class="ti">家</span><span>Главная</span></button>
   <button data-tab="dict"><span class="ti">辞</span><span>Словарь</span></button>
+  <button data-tab="profile"><span class="ti">私</span><span>Профиль</span></button>
   <button data-tab="settings"><span class="ti">⚙︎</span><span>Настройки</span></button>
 </nav>
-<script src="data.js?v=12"></script>
-<script src="app.js?v=12"></script>
+<script src="data.js?v=13"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

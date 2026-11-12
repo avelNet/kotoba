@@ -73,7 +73,7 @@ function freshState() {
   const newPerDay = {};
   for (const d of DECKS) newPerDay[d.key] = d.defNew;
   return {
-    v: 1, ts: 0, cards: {}, custom: [],
+    v: 1, ts: 0, cards: {}, custom: [], time: { start: null, days: {} },
     daily: { day: -1, new: {}, reviews: 0 },
     settings: { newPerDay, tts: true },
     streak: { last: -1, count: 0 },
@@ -86,6 +86,7 @@ function normalize(s) {
   return {
     v: 1, ts: s.ts || 0, cards: s.cards,
     custom: Array.isArray(s.custom) ? s.custom.filter(w => w && w.id && w.k && w.r) : [],
+    time: (s.time && typeof s.time.days === 'object') ? { start: s.time.start ?? null, days: s.time.days } : f.time,
     daily: { ...f.daily, ...(s.daily || {}) },
     settings: { ...f.settings, ...(s.settings || {}), newPerDay: { ...f.settings.newPerDay, ...((s.settings || {}).newPerDay || {}) } },
     streak: { ...f.streak, ...(s.streak || {}) },
@@ -200,10 +201,43 @@ function parseChunks(chunks) {
   }
   return cards;
 }
-function metaOf(state, n, nu = 0) {
-  const { cards, custom, ...rest } = state;
-  return JSON.stringify({ ...rest, n, nu });
+function metaOf(state, n, nu = 0, nt = 0) {
+  const { cards, custom, time, ...rest } = state;
+  return JSON.stringify({ ...rest, n, nu, nt });
 }
+// Время занятий: строки «день|сек в приложении|сек добавлено вручную», первая строка — «s|день начала учёта»
+function serializeTime(state) {
+  const t = state.time || { start: null, days: {} };
+  const lines = [`s|${t.start ?? ''}`];
+  for (const d of Object.keys(t.days).sort((a, b) => a - b)) {
+    const v = t.days[d]; lines.push(`${d}|${Math.round(v.a || 0)}|${Math.round(v.m || 0)}`);
+  }
+  const out = []; let cur = '';
+  for (const line of lines) {
+    if (cur && cur.length + line.length + 1 > 3500) { out.push(cur); cur = ''; }
+    cur = cur ? cur + '\n' + line : line;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+function parseTime(chunks) {
+  const t = { start: null, days: {} };
+  for (const ch of chunks) {
+    if (!ch) continue;
+    for (const line of ch.split('\n')) {
+      const p = line.split('|');
+      if (p[0] === 's') { t.start = p[1] === '' ? null : +p[1]; continue; }
+      if (p.length === 3) t.days[p[0]] = { a: +p[1], m: +p[2] };
+    }
+  }
+  return t;
+}
+// Группы кусков в CloudStorage: c — карточки, u — свои слова, t — время
+const GROUPS = [
+  { prefix: 'c', meta: 'n',  ser: serializeChunks, parse: (ch, out) => { out.cards = parseChunks(ch); } },
+  { prefix: 'u', meta: 'nu', ser: serializeCustom, parse: (ch, out) => { out.custom = parseCustom(ch); } },
+  { prefix: 't', meta: 'nt', ser: serializeTime,   parse: (ch, out) => { if (ch.length) out.time = parseTime(ch); } },
+];
 // Свои слова — отдельными кусками до ~3500 символов
 function serializeCustom(state) {
   const out = []; let cur = '';
@@ -228,7 +262,7 @@ function parseCustom(chunks) {
 }
 
 const Store = {
-  cloud: null, saved: [], savedU: [], timer: null, chain: Promise.resolve(),
+  cloud: null, savedG: { c: [], u: [], t: [] }, timer: null, chain: Promise.resolve(),
   why: '', lastSync: 0, failed: false,
   init() {
     const tg = typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp;
@@ -255,19 +289,18 @@ const Store = {
     const raw = await this.call('getItem', 'm');
     if (!raw) return null;
     let meta; try { meta = JSON.parse(raw); } catch (e) { return null; }
-    const keys = Array.from({ length: meta.n || 0 }, (_, k) => 'c' + k);
-    const ukeys = Array.from({ length: meta.nu || 0 }, (_, k) => 'u' + k);
-    let chunks = [], uchunks = [];
-    if (keys.length + ukeys.length) {
-      const res = await this.call('getItems', [...keys, ...ukeys]);
-      if (!res) return null;
-      chunks = keys.map(k => res[k] || '');
-      uchunks = ukeys.map(k => res[k] || '');
-    }
-    this.saved = chunks.slice();
-    this.savedU = uchunks.slice();
-    const { n, nu, ...rest } = meta;
-    return { ...rest, cards: parseChunks(chunks), custom: parseCustom(uchunks) };
+    const keysBy = GROUPS.map(g => Array.from({ length: meta[g.meta] || 0 }, (_, k) => g.prefix + k));
+    const all = keysBy.flat();
+    let res = {};
+    if (all.length) { res = await this.call('getItems', all); if (!res) return null; }
+    const { n, nu, nt, ...rest } = meta;
+    const out = { ...rest };
+    GROUPS.forEach((g, gi) => {
+      const ch = keysBy[gi].map(k => res[k] || '');
+      this.savedG[g.prefix] = ch.slice();
+      g.parse(ch, out);
+    });
+    return out;
   },
   async load() {
     this.init();
@@ -285,29 +318,23 @@ const Store = {
     this.timer = setTimeout(() => { this.chain = this.chain.then(() => this.flush(state)); }, immediate ? 0 : 250);
   },
   async flush(state) {
-    const chunks = serializeChunks(state);
     let ok = true;
-    for (let k = 0; k < chunks.length; k++) {
-      if (chunks[k] === this.saved[k]) continue;
-      if (await this.call('setItem', 'c' + k, chunks[k])) this.saved[k] = chunks[k];
-      else ok = false;
-    }
-    if (this.saved.length > chunks.length) {
-      const extra = []; for (let k = chunks.length; k < this.saved.length; k++) extra.push('c' + k);
-      if (await this.call('removeItems', extra)) this.saved.length = chunks.length;
-    }
-    const uchunks = serializeCustom(state);
-    for (let k = 0; k < uchunks.length; k++) {
-      if (uchunks[k] === this.savedU[k]) continue;
-      if (await this.call('setItem', 'u' + k, uchunks[k])) this.savedU[k] = uchunks[k];
-      else ok = false;
-    }
-    if (this.savedU.length > uchunks.length) {
-      const extra = []; for (let k = uchunks.length; k < this.savedU.length; k++) extra.push('u' + k);
-      if (await this.call('removeItems', extra)) this.savedU.length = uchunks.length;
+    const counts = {};
+    for (const g of GROUPS) {
+      const chunks = g.ser(state), saved = this.savedG[g.prefix];
+      counts[g.meta] = chunks.length;
+      for (let k = 0; k < chunks.length; k++) {
+        if (chunks[k] === saved[k]) continue;
+        if (await this.call('setItem', g.prefix + k, chunks[k])) saved[k] = chunks[k];
+        else ok = false;
+      }
+      if (saved.length > chunks.length) {
+        const extra = []; for (let k = chunks.length; k < saved.length; k++) extra.push(g.prefix + k);
+        if (await this.call('removeItems', extra)) saved.length = chunks.length;
+      }
     }
     // Метаданные пишем только если все куски записались, иначе облако останется в согласованном старом состоянии
-    if (ok && await this.call('setItem', 'm', metaOf(state, chunks.length, uchunks.length))) {
+    if (ok && await this.call('setItem', 'm', metaOf(state, counts.n, counts.nu, counts.nt))) {
       this.failed = false; this.lastSync = Date.now();
     } else {
       this.failed = true;
@@ -373,6 +400,7 @@ function setTabs(active) {
 }
 function openTab(tab) {
   if (tab === 'dict') renderDict();
+  else if (tab === 'profile') renderProfile();
   else if (tab === 'settings') renderSettings();
   else renderHome();
   window.scrollTo(0, 0);
@@ -687,6 +715,109 @@ function addWords(rows) {
   return res;
 }
 
+/* ================= Учёт времени ================= */
+
+const IDLE_MS = 120000; // если 2 минуты ничего не нажимал — время не идёт
+const TICK_S = 5;
+let lastActivity = Date.now();
+function timeDay(state, day) {
+  const d = state.time.days;
+  return d[day] || (d[day] = { a: 0, m: 0 });
+}
+function startTimeTracking() {
+  const bump = () => { lastActivity = Date.now(); };
+  ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(e => window.addEventListener(e, bump, { passive: true }));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) bump(); });
+  let sinceSave = 0;
+  setInterval(() => {
+    if (document.hidden || Date.now() - lastActivity > IDLE_MS || !S) return;
+    timeDay(S, dayNumber()).a += TICK_S;
+    sinceSave += TICK_S;
+    if (sinceSave >= 30) { sinceSave = 0; Store.save(S); }
+    if (currentTab === 'profile' && document.getElementById('ptoday')) updateProfileNumbers();
+  }, TICK_S * 1000);
+}
+function fmtDur(sec) {
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+}
+function daySum(state, day) { const v = state.time.days[day]; return v ? (v.a || 0) + (v.m || 0) : 0; }
+function timeStats(state) {
+  const today = dayNumber();
+  const start = state.time.start ?? today;
+  const tracked = Math.max(1, today - start + 1);
+  let total = 0;
+  for (const d in state.time.days) total += daySum(state, +d);
+  const dow = (new Date(Date.now() - ROLLOVER_HOURS * 36e5).getDay() + 6) % 7; // 0 = понедельник
+  let week = 0; for (let d = today - dow; d <= today; d++) week += daySum(state, d);
+  let last7 = 0; for (let d = today - 6; d <= today; d++) last7 += daySum(state, d);
+  return { today: daySum(state, today), week, avg7: last7 / Math.min(7, tracked), avgAll: total / tracked, total, tracked, start };
+}
+let profileManualLog = [];
+function updateProfileNumbers() {
+  const st = timeStats(S);
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('ptoday', fmtDur(st.today)); set('pweek', fmtDur(st.week)); set('pavg7', fmtDur(st.avg7));
+  set('pavgall', fmtDur(st.avgAll)); set('ptotal', fmtDur(st.total));
+}
+function renderProfile() {
+  setBack(null);
+  setTabs('profile');
+  const st = timeStats(S);
+  const today = dayNumber();
+  const days = [];
+  for (let d = today - 6; d <= today; d++) {
+    const v = S.time.days[d] || { a: 0, m: 0 };
+    const dt = new Date(Date.now() - (today - d) * DAY_MS - ROLLOVER_HOURS * 36e5);
+    days.push({ d, a: v.a || 0, m: v.m || 0, label: ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][dt.getDay()] });
+  }
+  const max = Math.max(1800, ...days.map(x => x.a + x.m));
+  const startDate = new Date(Date.now() - (today - st.start) * DAY_MS - ROLLOVER_HOURS * 36e5);
+  const counts = DECKS.map(d => [d.name, DATA[d.key].filter(c => S.cards[c.id] && S.cards[c.id].i >= LEARNED_DAYS).length]).filter(x => DATA[DECKS.find(d => d.name === x[0]).key].length);
+  $app().innerHTML = `<h2>Профиль</h2>
+    <section class="pstats">
+      <div class="stat"><div class="num sm" id="ptoday">${fmtDur(st.today)}</div><div class="muted small">сегодня</div></div>
+      <div class="stat"><div class="num sm" id="pweek">${fmtDur(st.week)}</div><div class="muted small">эта неделя</div></div>
+      <div class="stat"><div class="num sm" id="pavg7">${fmtDur(st.avg7)}</div><div class="muted small">в среднем в день<br>за 7 дней</div></div>
+      <div class="stat"><div class="num sm" id="pavgall">${fmtDur(st.avgAll)}</div><div class="muted small">в среднем в день<br>за всё время</div></div>
+    </section>
+    <div class="ptotal"><span class="muted small">Всего с ${startDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}</span><b id="ptotal">${fmtDur(st.total)}</b></div>
+    <h3>Последние 7 дней</h3>
+    <div class="chart">${days.map(x => `<div class="col${x.d === today ? ' today' : ''}" title="${fmtDur(x.a + x.m)}">
+      <div class="bars"><i class="m" style="height:${(x.m / max * 100).toFixed(1)}%"></i><i class="a" style="height:${(x.a / max * 100).toFixed(1)}%"></i></div>
+      <span class="v">${x.a + x.m >= 60 ? Math.round((x.a + x.m) / 60) : ''}</span><span class="muted small">${x.label}</span></div>`).join('')}</div>
+    <div class="legend muted small"><span><i class="a"></i>в Котобе</span><span><i class="m"></i>добавлено вручную</span><span>(минуты)</span></div>
+    <h3>Добавить время</h3>
+    <p class="muted small">Котоба считает время сама, пока ты в приложении. Учебник, тетрадь, аудирование и переписку добавляй здесь.</p>
+    <div class="addtime">${[10, 15, 30, 60].map(m => `<button class="btn" data-min="${m}">+${m} мин</button>`).join('')}</div>
+    <div class="row gap"><input type="number" id="pmin" class="search" min="1" max="600" inputmode="numeric" placeholder="Своё время, мин"><button class="btn" id="padd">Добавить</button></div>
+    <p class="muted small" id="pmsg" aria-live="polite"></p>
+    <h3>Выучено</h3>
+    <div class="pcounts">${counts.map(([n, c]) => `<div class="set-row"><span>${esc(n)}</span><b>${c}</b></div>`).join('')}</div>
+    <p class="muted small">🔥 Серия: ${S.streak.last >= today - 1 ? S.streak.count : 0} ${plural(S.streak.last >= today - 1 ? S.streak.count : 0, 'день', 'дня', 'дней')} подряд</p>`;
+  const add = min => {
+    min = Math.max(1, Math.min(600, Math.round(min)));
+    timeDay(S, dayNumber()).m += min * 60;
+    profileManualLog.push(min);
+    Store.save(S, true); haptic('light');
+    renderProfile();
+    const msg = document.getElementById('pmsg');
+    msg.innerHTML = `Добавлено ${min} мин · <button class="linkbtn" id="pundo">отменить</button>`;
+    document.getElementById('pundo').onclick = () => {
+      const last = profileManualLog.pop(); if (!last) return;
+      const v = timeDay(S, dayNumber()); v.m = Math.max(0, v.m - last * 60);
+      Store.save(S, true); renderProfile();
+    };
+  };
+  document.querySelectorAll('.addtime [data-min]').forEach(b => b.onclick = () => add(+b.dataset.min));
+  document.getElementById('padd').onclick = () => {
+    const v = parseInt(document.getElementById('pmin').value, 10);
+    if (v > 0) add(v); else document.getElementById('pmsg').textContent = 'Введи число минут';
+  };
+}
+
 function renderSettings() {
   const MAX_NEW = 400;
   // Сохраняем значения полей при любом выходе: на iOS событие change не срабатывает, если не убрать фокус
@@ -754,7 +885,9 @@ async function boot() {
   // свои слова, добавленные раньше, тоже ставим в изучение
   let pulled = false;
   for (const c of DATA.mine) if (!S.cards[c.id]) { S.cards[c.id] = newCardState(dayNumber()); pulled = true; }
+  if (S.time.start == null) { S.time.start = dayNumber(); pulled = true; }
   if (pulled) Store.save(S, true);
+  startTimeTracking();
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
   window.addEventListener('pagehide', () => { if (S) Store.save(S, true); });
@@ -769,4 +902,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
