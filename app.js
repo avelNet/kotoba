@@ -74,6 +74,8 @@ function freshState() {
   for (const d of DECKS) newPerDay[d.key] = d.defNew;
   return {
     v: 1, ts: 0, cards: {}, custom: [], time: { start: null, days: {} },
+    profile: { name: '', about: '', goal: 'N4', exam: '', avatar: { type: 'auto', char: '学', color: '#d1453b' } },
+    photo: '',
     daily: { day: -1, new: {}, reviews: 0 },
     settings: { newPerDay, tts: true },
     streak: { last: -1, count: 0 },
@@ -87,6 +89,8 @@ function normalize(s) {
     v: 1, ts: s.ts || 0, cards: s.cards,
     custom: Array.isArray(s.custom) ? s.custom.filter(w => w && w.id && w.k && w.r) : [],
     time: (s.time && typeof s.time.days === 'object') ? { start: s.time.start ?? null, days: s.time.days } : f.time,
+    profile: { ...f.profile, ...(s.profile || {}), avatar: { ...f.profile.avatar, ...((s.profile || {}).avatar || {}) } },
+    photo: typeof s.photo === 'string' ? s.photo : '',
     daily: { ...f.daily, ...(s.daily || {}) },
     settings: { ...f.settings, ...(s.settings || {}), newPerDay: { ...f.settings.newPerDay, ...((s.settings || {}).newPerDay || {}) } },
     streak: { ...f.streak, ...(s.streak || {}) },
@@ -201,9 +205,14 @@ function parseChunks(chunks) {
   }
   return cards;
 }
-function metaOf(state, n, nu = 0, nt = 0) {
-  const { cards, custom, time, ...rest } = state;
-  return JSON.stringify({ ...rest, n, nu, nt });
+function metaOf(state, n, nu = 0, nt = 0, np = 0) {
+  const { cards, custom, time, photo, ...rest } = state;
+  return JSON.stringify({ ...rest, n, nu, nt, np });
+}
+function serializePhoto(state) {
+  const p = state.photo || '', out = [];
+  for (let k = 0; k < p.length; k += 3500) out.push(p.slice(k, k + 3500));
+  return out;
 }
 // Время занятий: строки «день|сек в приложении|сек добавлено вручную», первая строка — «s|день начала учёта»
 function serializeTime(state) {
@@ -237,6 +246,7 @@ const GROUPS = [
   { prefix: 'c', meta: 'n',  ser: serializeChunks, parse: (ch, out) => { out.cards = parseChunks(ch); } },
   { prefix: 'u', meta: 'nu', ser: serializeCustom, parse: (ch, out) => { out.custom = parseCustom(ch); } },
   { prefix: 't', meta: 'nt', ser: serializeTime,   parse: (ch, out) => { if (ch.length) out.time = parseTime(ch); } },
+  { prefix: 'p', meta: 'np', ser: serializePhoto,  parse: (ch, out) => { out.photo = ch.join(''); } },
 ];
 // Свои слова — отдельными кусками до ~3500 символов
 function serializeCustom(state) {
@@ -262,7 +272,7 @@ function parseCustom(chunks) {
 }
 
 const Store = {
-  cloud: null, savedG: { c: [], u: [], t: [] }, timer: null, chain: Promise.resolve(),
+  cloud: null, savedG: { c: [], u: [], t: [], p: [] }, timer: null, chain: Promise.resolve(),
   why: '', lastSync: 0, failed: false,
   init() {
     const tg = typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp;
@@ -293,7 +303,7 @@ const Store = {
     const all = keysBy.flat();
     let res = {};
     if (all.length) { res = await this.call('getItems', all); if (!res) return null; }
-    const { n, nu, nt, ...rest } = meta;
+    const { n, nu, nt, np, ...rest } = meta;
     const out = { ...rest };
     GROUPS.forEach((g, gi) => {
       const ch = keysBy[gi].map(k => res[k] || '');
@@ -334,7 +344,7 @@ const Store = {
       }
     }
     // Метаданные пишем только если все куски записались, иначе облако останется в согласованном старом состоянии
-    if (ok && await this.call('setItem', 'm', metaOf(state, counts.n, counts.nu, counts.nt))) {
+    if (ok && await this.call('setItem', 'm', metaOf(state, counts.n, counts.nu, counts.nt, counts.np))) {
       this.failed = false; this.lastSync = Date.now();
     } else {
       this.failed = true;
@@ -762,11 +772,33 @@ function updateProfileNumbers() {
   set('ptoday', fmtDur(st.today)); set('pweek', fmtDur(st.week)); set('pavg7', fmtDur(st.avg7));
   set('pavgall', fmtDur(st.avgAll)); set('ptotal', fmtDur(st.total));
 }
+const TG_USER = () => { try { const tg = TG(); return (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null; } catch (e) { return null; } };
+const GOALS = ['N5', 'N4', 'N3', 'N2', 'N1'];
+const AV_COLORS = ['#d1453b', '#e08a1e', '#2b9a64', '#2f8fbf', '#4a6fe0', '#8a5cd6', '#c2477f', '#5b6170'];
+const AV_CHARS = ['学', '桜', '猫', '侍', '龍', '星', '山', '海', '火', '心'];
+function profileName() { const u = TG_USER(); return S.profile.name || (u && u.first_name) || 'Ученик'; }
+function avatarHTML(size, prof = S.profile, photo = S.photo) {
+  const u = TG_USER(), av = prof.avatar;
+  const type = av.type === 'auto' ? (photo ? 'photo' : (u && u.photo_url ? 'tg' : 'char')) : av.type;
+  const st = `width:${size}px;height:${size}px`;
+  if (type === 'photo' && photo) return `<img class="ava" style="${st}" src="${photo}" alt="">`;
+  if (type === 'tg' && u && u.photo_url) return `<img class="ava" style="${st}" src="${esc(u.photo_url)}" alt="" referrerpolicy="no-referrer">`;
+  return `<span class="ava ch" style="${st};background:${esc(av.color)};font-size:${Math.round(size * .48)}px">${esc(av.char || '学')}</span>`;
+}
+function examLeft() {
+  if (!S.profile.exam) return null;
+  const [y, m, d] = S.profile.exam.split('-').map(Number);
+  const ms = new Date(y, m - 1, d) - new Date(new Date().toDateString());
+  return Math.round(ms / DAY_MS);
+}
+function totalAnswers() { let n = 0; for (const id in S.cards) n += S.cards[id].r || 0; return n; }
+
 function renderProfile() {
   setBack(null);
   setTabs('profile');
   const st = timeStats(S);
   const today = dayNumber();
+  const u = TG_USER();
   const days = [];
   for (let d = today - 6; d <= today; d++) {
     const v = S.time.days[d] || { a: 0, m: 0 };
@@ -775,8 +807,36 @@ function renderProfile() {
   }
   const max = Math.max(1800, ...days.map(x => x.a + x.m));
   const startDate = new Date(Date.now() - (today - st.start) * DAY_MS - ROLLOVER_HOURS * 36e5);
-  const counts = DECKS.map(d => [d.name, DATA[d.key].filter(c => S.cards[c.id] && S.cards[c.id].i >= LEARNED_DAYS).length]).filter(x => DATA[DECKS.find(d => d.name === x[0]).key].length);
-  $app().innerHTML = `<h2>Профиль</h2>
+  const learned = k => DATA[k].filter(c => S.cards[c.id] && S.cards[c.id].i >= LEARNED_DAYS).length;
+  const kana = learned('hira') + learned('kata');
+  const words = learned('words') + learned('mine');
+  const kanji = learned('kanji');
+  const streak = S.streak.last >= today - 1 ? S.streak.count : 0;
+  const left = examLeft();
+  $app().innerHTML = `
+    <section class="phead">
+      <button class="icon gear" id="psettings" aria-label="Настройки">⚙︎</button>
+      ${avatarHTML(84)}
+      <div class="pname">${esc(profileName())}</div>
+      ${u && u.username ? `<div class="muted small">@${esc(u.username)}</div>` : ''}
+      ${S.profile.about ? `<p class="pabout">${esc(S.profile.about)}</p>` : ''}
+      <div class="pbadges">
+        <span class="badge">🎯 Цель: JLPT ${esc(S.profile.goal)}</span>
+        ${left != null ? `<span class="badge">${left > 0 ? `📅 до экзамена ${left} ${plural(left, 'день', 'дня', 'дней')}` : left === 0 ? '📅 экзамен сегодня!' : '📅 экзамен прошёл'}</span>` : ''}
+        <span class="badge">🔥 ${streak} ${plural(streak, 'день', 'дня', 'дней')} подряд</span>
+      </div>
+      <button class="btn small-btn" id="pedit">Редактировать профиль</button>
+    </section>
+
+    <h3>Выучено</h3>
+    <section class="pstats three">
+      <div class="stat"><div class="num sm">${kana}</div><div class="muted small">знаков каны</div></div>
+      <div class="stat"><div class="num sm">${words}</div><div class="muted small">слов</div></div>
+      <div class="stat"><div class="num sm">${kanji}</div><div class="muted small">кандзи</div></div>
+    </section>
+    <div class="ptotal"><span class="muted small">Ответов в повторениях за всё время</span><b>${totalAnswers()}</b></div>
+
+    <h3>Время занятий</h3>
     <section class="pstats">
       <div class="stat"><div class="num sm" id="ptoday">${fmtDur(st.today)}</div><div class="muted small">сегодня</div></div>
       <div class="stat"><div class="num sm" id="pweek">${fmtDur(st.week)}</div><div class="muted small">эта неделя</div></div>
@@ -784,31 +844,32 @@ function renderProfile() {
       <div class="stat"><div class="num sm" id="pavgall">${fmtDur(st.avgAll)}</div><div class="muted small">в среднем в день<br>за всё время</div></div>
     </section>
     <div class="ptotal"><span class="muted small">Всего с ${startDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}</span><b id="ptotal">${fmtDur(st.total)}</b></div>
-    <h3>Последние 7 дней</h3>
     <div class="chart">${days.map(x => `<div class="col${x.d === today ? ' today' : ''}" title="${fmtDur(x.a + x.m)}">
       <div class="bars"><i class="m" style="height:${(x.m / max * 100).toFixed(1)}%"></i><i class="a" style="height:${(x.a / max * 100).toFixed(1)}%"></i></div>
       <span class="v">${x.a + x.m >= 60 ? Math.round((x.a + x.m) / 60) : ''}</span><span class="muted small">${x.label}</span></div>`).join('')}</div>
     <div class="legend muted small"><span><i class="a"></i>в Котобе</span><span><i class="m"></i>добавлено вручную</span><span>(минуты)</span></div>
+
     <h3>Добавить время</h3>
     <p class="muted small">Котоба считает время сама, пока ты в приложении. Учебник, тетрадь, аудирование и переписку добавляй здесь.</p>
     <div class="addtime">${[10, 15, 30, 60].map(m => `<button class="btn" data-min="${m}">+${m} мин</button>`).join('')}</div>
     <div class="row gap"><input type="number" id="pmin" class="search" min="1" max="600" inputmode="numeric" placeholder="Своё время, мин"><button class="btn" id="padd">Добавить</button></div>
     <p class="muted small" id="pmsg" aria-live="polite"></p>
-    <h3>Выучено</h3>
-    <div class="pcounts">${counts.map(([n, c]) => `<div class="set-row"><span>${esc(n)}</span><b>${c}</b></div>`).join('')}</div>
-    <p class="muted small">🔥 Серия: ${S.streak.last >= today - 1 ? S.streak.count : 0} ${plural(S.streak.last >= today - 1 ? S.streak.count : 0, 'день', 'дня', 'дней')} подряд</p>`;
+    <div id="sync" class="muted small center"></div>`;
+  updateSyncBadge();
+  document.getElementById('psettings').onclick = () => { haptic('light'); renderSettings(); };
+  document.getElementById('pedit').onclick = renderProfileEdit;
   const add = min => {
     min = Math.max(1, Math.min(600, Math.round(min)));
     timeDay(S, dayNumber()).m += min * 60;
     profileManualLog.push(min);
     Store.save(S, true); haptic('light');
-    renderProfile();
+    const y = window.scrollY; renderProfile(); window.scrollTo(0, y);
     const msg = document.getElementById('pmsg');
     msg.innerHTML = `Добавлено ${min} мин · <button class="linkbtn" id="pundo">отменить</button>`;
     document.getElementById('pundo').onclick = () => {
       const last = profileManualLog.pop(); if (!last) return;
       const v = timeDay(S, dayNumber()); v.m = Math.max(0, v.m - last * 60);
-      Store.save(S, true); renderProfile();
+      Store.save(S, true); const y2 = window.scrollY; renderProfile(); window.scrollTo(0, y2);
     };
   };
   document.querySelectorAll('.addtime [data-min]').forEach(b => b.onclick = () => add(+b.dataset.min));
@@ -816,6 +877,83 @@ function renderProfile() {
     const v = parseInt(document.getElementById('pmin').value, 10);
     if (v > 0) add(v); else document.getElementById('pmsg').textContent = 'Введи число минут';
   };
+}
+
+// Редактирование профиля: изменения в черновике, сохраняются кнопкой
+function renderProfileEdit() {
+  const u = TG_USER();
+  const draft = JSON.parse(JSON.stringify(S.profile));
+  let photo = S.photo;
+  if (draft.avatar.type === 'auto') draft.avatar.type = photo ? 'photo' : (u && u.photo_url ? 'tg' : 'char');
+  setTabs('profile');
+  const back = () => renderProfile();
+  setBack(back);
+  const draw = () => {
+    $app().innerHTML = `<div class="row"><button class="linkbtn" id="eback">← Профиль</button></div>
+      <h2>Профиль</h2>
+      <section class="phead flat"><div id="eprev">${avatarHTML(84, draft, photo)}</div></section>
+      <div class="seg" id="atype">
+        ${u && u.photo_url ? `<button data-t="tg" aria-pressed="${draft.avatar.type === 'tg'}">Фото Telegram</button>` : ''}
+        <button data-t="photo" aria-pressed="${draft.avatar.type === 'photo'}">Своё фото</button>
+        <button data-t="char" aria-pressed="${draft.avatar.type === 'char'}">Иероглиф</button>
+      </div>
+      <div id="aopts"></div>
+      <label class="field"><span class="muted small">Имя</span><input id="ename" class="search" maxlength="40" value="${esc(draft.name || profileName())}"></label>
+      <label class="field"><span class="muted small">О себе</span><textarea id="eabout" rows="3" maxlength="160" placeholder="Например: учу японский, чтобы переехать в Японию">${esc(draft.about)}</textarea></label>
+      <div class="field"><span class="muted small">Цель</span><div class="seg" id="egoal">${GOALS.map(g => `<button data-g="${g}" aria-pressed="${draft.goal === g}">${g}</button>`).join('')}</div></div>
+      <label class="field"><span class="muted small">Дата экзамена (необязательно)</span><input type="date" id="eexam" class="search" value="${esc(draft.exam)}"></label>
+      <button class="btn primary big" id="esave">Сохранить</button>`;
+    const opts = document.getElementById('aopts');
+    if (draft.avatar.type === 'char') {
+      opts.innerHTML = `<div class="pick">${AV_CHARS.map(c => `<button class="chip${draft.avatar.char === c ? ' on' : ''}" data-c="${c}">${c}</button>`).join('')}</div>
+        <div class="pick">${AV_COLORS.map(c => `<button class="dot${draft.avatar.color === c ? ' on' : ''}" data-col="${c}" style="background:${c}" aria-label="Цвет"></button>`).join('')}</div>`;
+      opts.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { keep(); draft.avatar.char = b.dataset.c; draw(); });
+      opts.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { keep(); draft.avatar.color = b.dataset.col; draw(); });
+    } else if (draft.avatar.type === 'photo') {
+      opts.innerHTML = `<label class="btn big filebtn">${photo ? 'Выбрать другое фото' : 'Выбрать фото'}<input type="file" id="efile" accept="image/*" hidden></label>
+        <p class="muted small" id="emsg"></p>`;
+      document.getElementById('efile').onchange = e => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        document.getElementById('emsg').textContent = 'Обрабатываю…';
+        shrinkPhoto(f).then(url => { keep(); photo = url; draw(); }).catch(() => { document.getElementById('emsg').textContent = 'Не получилось открыть это фото'; });
+      };
+    }
+    document.getElementById('atype').onclick = e => { const b = e.target.closest('button'); if (!b) return; keep(); draft.avatar.type = b.dataset.t; draw(); };
+    document.getElementById('egoal').onclick = e => { const b = e.target.closest('button'); if (!b) return; keep(); draft.goal = b.dataset.g; draw(); };
+    document.getElementById('eback').onclick = back;
+    document.getElementById('esave').onclick = () => {
+      keep();
+      S.profile = draft;
+      S.photo = photo || '';
+      Store.save(S, true); haptic('light');
+      renderProfile();
+    };
+  };
+  const keep = () => {
+    const n = document.getElementById('ename'); if (n) draft.name = n.value.trim().slice(0, 40);
+    const a = document.getElementById('eabout'); if (a) draft.about = a.value.trim().slice(0, 160);
+    const x = document.getElementById('eexam'); if (x) draft.exam = x.value;
+  };
+  draw();
+}
+// Уменьшаем фото до 128×128 (JPEG), чтобы влезло в облако Telegram
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = reject;
+    r.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const S2 = 128, c = document.createElement('canvas'); c.width = c.height = S2;
+        const k = Math.max(S2 / img.width, S2 / img.height), w = img.width * k, h = img.height * k;
+        c.getContext('2d').drawImage(img, (S2 - w) / 2, (S2 - h) / 2, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.72));
+      };
+      img.src = r.result;
+    };
+    r.readAsDataURL(file);
+  });
 }
 
 function renderSettings() {
@@ -829,11 +967,13 @@ function renderSettings() {
     Store.save(S, true);
   };
   setBack(null);
-  setTabs('settings');
+  setTabs('profile');
   renderSettings.commit = commit;
+  setBack(() => { commit(); renderProfile(); });
   const inputs = DECKS.map(d => `<label class="set-row"><span>${esc(d.name)}: новых в день</span>
     <input type="number" min="0" max="${MAX_NEW}" inputmode="numeric" data-k="${d.key}" value="${S.settings.newPerDay[d.key]}"></label>`).join('');
-  $app().innerHTML = `<h2>Настройки</h2>
+  $app().innerHTML = `<div class="row"><button class="linkbtn" id="sback">← Профиль</button></div>
+    <h2>Настройки</h2>
     ${inputs}
     <button class="btn primary big" id="save">Сохранить</button>
     <p class="muted small" id="saved" hidden>Сохранено ✓</p>
@@ -846,6 +986,7 @@ function renderSettings() {
     <h3>Опасная зона</h3>
     <button class="btn danger" id="reset">Сбросить весь прогресс</button>
     <p class="muted small center">Котоба · ${Object.keys(S.cards).length} карточек в изучении</p>`;
+  document.getElementById('sback').onclick = () => { commit(); renderProfile(); };
   $app().querySelectorAll('input[data-k]').forEach(inp => {
     inp.oninput = commit;
     inp.onblur = () => { inp.value = S.settings.newPerDay[inp.dataset.k]; };

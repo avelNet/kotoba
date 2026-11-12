@@ -90,7 +90,7 @@
   textarea { width: 100%; font: 12px ui-monospace, monospace; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
   #sync.warn { color: #d68512; }
   body.has-tabs #app { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
-  #tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(4, 1fr);
+  #tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, 1fr);
     background: var(--bg); border-top: 1px solid var(--line); padding: 6px 8px calc(8px + env(safe-area-inset-bottom)); }
   #tabs[hidden] { display: none; }
   #tabs button { appearance: none; border: 0; background: none; color: var(--muted); font: 600 11px/1.2 inherit; font-family: inherit;
@@ -140,6 +140,24 @@
   .row.gap .search { flex: 1; min-width: 0; }
   .linkbtn { appearance: none; border: 0; background: none; color: var(--accent); font: inherit; padding: 0; cursor: pointer; text-decoration: underline; }
   .pcounts { display: flex; flex-direction: column; gap: 6px; }
+  .phead { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; background: var(--card); border-radius: 20px; padding: 22px 16px 16px; }
+  .phead.flat { background: none; padding: 4px; }
+  .phead .gear { position: absolute; top: 8px; right: 8px; font-size: 22px; color: var(--muted); }
+  .ava { border-radius: 50%; object-fit: cover; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-family: "Hiragino Mincho ProN", "Noto Serif JP", serif; flex: none; }
+  .pname { font-size: 22px; font-weight: 700; margin-top: 4px; }
+  .pabout { margin: 2px 0 0; max-width: 40ch; overflow-wrap: anywhere; }
+  .pbadges { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+  .badge { font-size: 13px; background: var(--bg); border-radius: 999px; padding: 5px 10px; }
+  .small-btn { padding: 8px 14px; font-size: 14px; margin-top: 6px; background: var(--bg); }
+  .pstats.three { grid-template-columns: repeat(3, 1fr); }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field textarea { font: 16px inherit; font-family: inherit; }
+  .pick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .chip { appearance: none; border: 2px solid transparent; background: var(--card); color: var(--text); width: 44px; height: 44px; border-radius: 12px; font: 22px "Hiragino Mincho ProN", "Noto Serif JP", serif; cursor: pointer; }
+  .chip.on { border-color: var(--accent); }
+  .dot { appearance: none; border: 3px solid transparent; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; }
+  .dot.on { border-color: var(--text); }
+  .filebtn { text-align: center; cursor: pointer; }
   .loading { flex: 1; display: grid; place-items: center; color: var(--muted); }
 </style>
 </head>
@@ -149,9 +167,8 @@
   <button data-tab="home" aria-current="page"><span class="ti">家</span><span>Главная</span></button>
   <button data-tab="dict"><span class="ti">辞</span><span>Словарь</span></button>
   <button data-tab="profile"><span class="ti">私</span><span>Профиль</span></button>
-  <button data-tab="settings"><span class="ti">⚙︎</span><span>Настройки</span></button>
 </nav>
-<script src="data.js?v=13"></script>
-<script src="app.js?v=13"></script>
+<script src="data.js?v=14"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>
