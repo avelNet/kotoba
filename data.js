@@ -965,13 +965,18 @@ const KANJI_EX_SRC = `
 
 const toKatakana = s => s.replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
 
+// Слова, которые пишут и каной, и кандзи (оба варианта встречаются)
+const KANJI_LATE = { 'おやすみなさい': 'お休みなさい', 'はじめまして': '初めまして' };
+
 function buildData() {
   const kanaPairs = KANA_SRC.trim().split(/\s+/).map(t => t.split('|'));
   const hira = kanaPairs.map(([k, r]) => ({ id: 'h:' + k, deck: 'hira', front: k, romaji: r }));
   const kata = kanaPairs.map(([k, r]) => ({ id: 'k:' + toKatakana(k), deck: 'kata', front: toKatakana(k), romaji: r }));
   const words = WORDS_SRC.trim().split('\n').map(l => {
-    const [kana, kanji, ru] = l.split('|');
-    return { id: 'w:' + kana + '/' + kanji, deck: 'words', front: kana, kanji, ru, hasKata: /[ァ-ヺー]/.test(kana) };
+    const [kana, kanji0, ru] = l.split('|');
+    // кандзи, добавленный позже: id остаётся старым, чтобы не сбить прогресс
+    const kanji = kanji0 || KANJI_LATE[kana] || '';
+    return { id: 'w:' + kana + '/' + kanji0, deck: 'words', front: kana, kanji, ru, hasKata: /[ァ-ヺー]/.test(kana) };
   });
   const kanji = KANJI_SRC.trim().split('\n').map(l => {
     const [ch, on, kun, ru] = l.split('|');
