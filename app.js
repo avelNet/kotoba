@@ -471,7 +471,9 @@ function startPractice(filter) {
 }
 
 function cardFront(c) {
-  return `<div class="front ${c.deck === 'words' || c.deck === 'mine' ? 'word' : ''}">${esc(c.front)}</div>`;
+  const isWord = c.deck === 'words' || c.deck === 'mine';
+  // длинные слова уменьшаем, чтобы помещались в одну строку карточки
+  return `<div class="front ${isWord ? 'word' : ''}"${isWord ? ` style="--len:${Math.max(4, [...c.front].length)}"` : ''}>${esc(c.front)}</div>`;
 }
 function cardBack(c) {
   if (c.deck === 'hira' || c.deck === 'kata') return `<div class="answer">${esc(c.romaji)}</div>`;
