@@ -8,9 +8,11 @@ const DECKS = [
   { key: 'kata',  name: 'Катакана', needs: 'hira', defNew: 10 },
   { key: 'words', name: 'Слова',    needs: 'hira', defNew: 10 },
   { key: 'kanji', name: 'Кандзи',   needs: 'kata', defNew: 3 },
+  { key: 'wk',    name: 'Слова в кандзи', needs: 'kata', defNew: 10 },
   { key: 'mine',  name: 'Мои слова', needs: null,  defNew: 10 },
 ];
 DATA.mine = [];
+DATA.wk = [];
 const BY_ID = {};
 for (const d of DECKS) for (const c of DATA[d.key]) BY_ID[c.id] = c;
 
@@ -19,6 +21,43 @@ function setCustom(list) {
   for (const c of DATA.mine) delete BY_ID[c.id];
   DATA.mine = (list || []).map(w => ({ id: w.id, deck: 'mine', front: w.k, kanji: w.j || '', ru: w.r }));
   for (const c of DATA.mine) BY_ID[c.id] = c;
+  rebuildWK();
+}
+// «Слова в кандзи»: для каждого слова с кандзи — отдельная карточка «кандзи → чтение и перевод».
+// Создаются автоматически, ничего вручную исправлять не нужно.
+const isKanjiChar = ch => /[\u4e00-\u9fff\u3005]/.test(ch);
+function rebuildWK() {
+  for (const c of DATA.wk) delete BY_ID[c.id];
+  const seen = new Set();
+  DATA.wk = [];
+  for (const w of [...DATA.words, ...DATA.mine]) {
+    if (!w.kanji || ![...w.kanji].some(isKanjiChar)) continue;
+    const id = 'x:' + w.id;
+    if (seen.has(id)) continue; seen.add(id);
+    DATA.wk.push({ id, deck: 'wk', front: w.kanji, kana: w.front, ru: w.ru, src: w.id });
+  }
+  for (const c of DATA.wk) BY_ID[c.id] = c;
+}
+rebuildWK();
+// Карточка слова в кандзи открывается, когда само слово уже знакомо и все его кандзи пройдены в колоде «Кандзи»
+function wkEligible(state, c) {
+  const src = state.cards[c.src];
+  if (!src || !(src.r >= 1)) return false;
+  for (const ch of c.front) {
+    if (!isKanjiChar(ch)) continue;
+    if (!BY_ID['j:' + ch] || !state.cards['j:' + ch]) return false;
+  }
+  return true;
+}
+// Порядок новых кандзи: сначала знаки из уже знакомых слов (чаще встречающиеся — раньше), потом остальные
+function kanjiOrder(state) {
+  const freq = {};
+  for (const w of [...DATA.words, ...DATA.mine]) {
+    if (!w.kanji || !state.cards[w.id]) continue;
+    for (const ch of new Set(w.kanji)) if (isKanjiChar(ch)) freq[ch] = (freq[ch] || 0) + 1;
+  }
+  return DATA.kanji.map((c, i) => ({ c, i, f: freq[c.front] || 0 }))
+    .sort((a, b) => (b.f > 0) - (a.f > 0) || b.f - a.f || a.i - b.i).map(x => x.c);
 }
 const cleanField = v => String(v || '').replace(/[\t\n\r|]+/g, ' ').trim();
 
@@ -115,7 +154,11 @@ function newAvailable(state, deck, extra = 0) {
   let left = (state.settings.newPerDay[deck.key] || 0) - done + extra;
   const kataReady = deckComplete(state, 'kata');
   const out = [];
-  for (const c of DATA[deck.key]) {
+  let list = DATA[deck.key];
+  if (deck.key === 'kanji') list = kanjiOrder(state);
+  if (deck.key === 'wk') list = DATA.wk.filter(c => !state.cards[c.id] && wkEligible(state, c))
+    .sort((a, b) => (state.cards[b.src].i || 0) - (state.cards[a.src].i || 0));
+  for (const c of list) {
     if (left <= 0) break;
     if (state.cards[c.id]) continue;
     if (c.hasKata && !kataReady) continue;
@@ -143,8 +186,11 @@ function buildQueue(state, today, extra = 0, onlyDeck = null) {
   rollDay(state, today);
   const due = shuffle(dueIds(state, today, onlyDeck));
   // новые карточки разных колод чередуем по очереди: кана, слово, кана, слово…
-  const perDeck = DECKS.filter(d => !onlyDeck || d.key === onlyDeck).map(d => newAvailable(state, d, extra));
-  const news = [];
+  const decks = DECKS.filter(d => !onlyDeck || d.key === onlyDeck);
+  // сначала кандзи-версии уже знакомых слов, потом остальные новые вперемешку
+  const wkNews = decks.filter(d => d.key === 'wk').flatMap(d => newAvailable(state, d, extra));
+  const perDeck = decks.filter(d => d.key !== 'wk').map(d => newAvailable(state, d, extra));
+  const news = [...wkNews];
   for (let i = 0; perDeck.some(l => i < l.length); i++) for (const l of perDeck) if (i < l.length) news.push(l[i]);
   if (!due.length) return news;
   if (!news.length) return due;
@@ -436,7 +482,9 @@ function renderHome() {
     const nw = newAvailable(S, d).length; newAll += nw;
     const unlocked = deckUnlocked(S, d);
     const needName = d.needs ? DECKS.find(x => x.key === d.needs).name : '';
+    const wkReady = d.key === 'wk' ? DATA.wk.filter(c => S.cards[c.id] || wkEligible(S, c)).length : 0;
     const status = d.key === 'mine' && !total ? 'добавь свои слова во вкладке «Словарь»'
+      : d.key === 'wk' && unlocked && !wkReady ? 'появятся, когда пройдёшь кандзи из знакомых слов'
       : !unlocked ? `🔒 после «${esc(needName)}»`
       : intro === total ? `пройдено, повторений: ${due}`
       : `новых: ${nw} · повторить: ${due}`;
@@ -509,20 +557,20 @@ function startPractice(filter) {
 }
 
 function cardFront(c) {
-  const isWord = c.deck === 'words' || c.deck === 'mine';
+  const isWord = c.deck === 'words' || c.deck === 'mine' || c.deck === 'wk';
   // длинные слова уменьшаем, чтобы помещались в одну строку карточки
   return `<div class="front ${isWord ? 'word' : ''}"${isWord ? ` style="--len:${Math.max(4, [...c.front].length)}"` : ''}>${esc(c.front)}</div>`;
 }
 function cardBack(c) {
   if (c.deck === 'hira' || c.deck === 'kata') return `<div class="answer">${esc(c.romaji)}</div>`;
   if (c.deck === 'words' || c.deck === 'mine') return `<div class="answer">${esc(c.ru)}</div>${c.kanji ? `<div class="kanji-form">${esc(c.kanji)}</div>` : ''}`;
-  const ex = DATA.words.filter(w => w.kanji && w.kanji.includes(c.front)).slice(0, 3)
-    .map(w => `<div class="ex"><span class="jp">${esc(w.kanji)}</span> <span class="muted">${esc(w.front)}</span> — ${esc(w.ru)}</div>`).join('');
+  if (c.deck === 'wk') return `<div class="kanji-form">${esc(c.kana)}</div><div class="answer">${esc(c.ru)}</div>`;
+  const ex = (c.ex || []).map(e => `<div class="ex"><span class="jp">${esc(e.w)}</span> <span class="muted">${esc(e.r)}</span>${e.sp ? ' <span class="tag">особое</span>' : ''} — ${esc(e.ru)}</div>`).join('');
   return `<div class="answer">${esc(c.ru)}</div>
     <div class="readings">${c.on ? `<div><span class="tag">он</span> ${esc(c.on)}</div>` : ''}${c.kun ? `<div><span class="tag">кун</span> ${esc(c.kun)}</div>` : ''}</div>
     ${ex ? `<div class="examples">${ex}</div>` : ''}`;
 }
-const speakText = c => c.deck === 'kanji' ? '' : c.front;
+const speakText = c => c.deck === 'kanji' ? '' : c.deck === 'wk' ? c.kana : c.front;
 
 function renderCard() {
   const s = session;
@@ -1043,4 +1091,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
