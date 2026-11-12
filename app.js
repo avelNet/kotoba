@@ -729,10 +729,27 @@ function renderDict() {
           const st = S.cards[w.id] ? strength(S.cards[w.id].i) : 0;
           return `<div class="drow${isMine ? ' mine' : ''}" data-say="${esc(w.front)}" role="button" tabindex="0"><span class="dk"><span class="dkana">${esc(w.front)}</span>${w.kanji ? `<span class="dkanji">${esc(w.kanji)}</span>` : ''}</span>
             <span class="dru">${esc(w.ru)}</span><span class="dots" title="Прочность запоминания">${S.cards[w.id] ? '●'.repeat(st) + '○'.repeat(4 - st) : 'новое'}</span>
-            ${isMine ? `<button class="ddel" data-id="${esc(w.id)}" aria-label="Удалить">✕</button>` : ''}</div>`;
+            ${isMine ? `<span class="dact"><button class="dedit" data-id="${esc(w.id)}" aria-label="Изменить">✎</button><button class="ddel" data-id="${esc(w.id)}" aria-label="Удалить">✕</button></span>` : ''}</div>`;
         }).join('')}</div>`
       : `<div class="done muted">${q ? 'Ничего не найдено' : dictState.filter === 'learned' ? 'Пока пусто. Слово попадёт сюда, когда ты несколько раз подряд вспомнишь его в повторениях.' : isMine ? 'Своих слов пока нет. Добавь первое выше.' : 'Пока пусто. Начни учить колоду «Слова» на главной.'}</div>`;
-    document.querySelectorAll('.drow').forEach(b => b.onclick = e => { if (!e.target.closest('.ddel')) speak(b.dataset.say); });
+    document.querySelectorAll('.drow').forEach(b => b.onclick = e => { if (!e.target.closest('.dact')) speak(b.dataset.say); });
+    document.querySelectorAll('.dedit').forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const w = S.custom.find(x => x.id === b.dataset.id); if (!w) return;
+      const row = b.closest('.drow');
+      row.outerHTML = `<div class="editrow" data-id="${esc(w.id)}">
+        <div class="addrow"><input class="search" data-f="k" value="${esc(w.k)}" placeholder="Кана"><input class="search" data-f="r" value="${esc(w.r)}" placeholder="Перевод"></div>
+        <input class="search" data-f="j" value="${esc(w.j || '')}" placeholder="Кандзи (необязательно)">
+        <div class="row gap"><button class="btn" data-act="cancel">Отмена</button><button class="btn primary" data-act="save">Сохранить</button></div></div>`;
+      const box = document.querySelector(`.editrow[data-id="${CSS.escape(w.id)}"]`);
+      box.querySelector('[data-act=cancel]').onclick = () => draw();
+      box.querySelector('[data-act=save]').onclick = () => {
+        const v = f => cleanField(box.querySelector(`[data-f=${f}]`).value);
+        if (!v('k') || !v('r')) { box.querySelector('[data-f=k]').focus(); return; }
+        w.k = v('k'); w.r = v('r'); w.j = v('j');
+        setCustom(S.custom); Store.save(S, true); haptic('light'); renderDict();
+      };
+    });
     document.querySelectorAll('.ddel').forEach(b => b.onclick = e => {
       e.stopPropagation();
       if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Удалить?'; return; }

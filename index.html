@@ -119,6 +119,11 @@
   .bulk[open] { display: flex; flex-direction: column; gap: 8px; }
   .bulk textarea { font: 16px inherit; font-family: inherit; background: var(--bg); }
   .drow.mine { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto auto; }
+  .dact { display: flex; gap: 2px; }
+  .dedit { appearance: none; border: 0; background: none; color: var(--muted); font: 600 15px inherit; font-family: inherit; padding: 6px; cursor: pointer; }
+  .editrow { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
+  .editrow .search { background: var(--bg); }
+  .editrow .row .btn { flex: 1; }
   .ddel { appearance: none; border: 0; background: none; color: var(--muted); font: 600 14px inherit; font-family: inherit; padding: 6px; cursor: pointer; }
   .ddel.armed { color: #e5484d; }
   .pstats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -168,7 +173,7 @@
   <button data-tab="dict"><span class="ti">辞</span><span>Словарь</span></button>
   <button data-tab="profile"><span class="ti">私</span><span>Профиль</span></button>
 </nav>
-<script src="data.js?v=15"></script>
-<script src="app.js?v=15"></script>
+<script src="data.js?v=16"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>
