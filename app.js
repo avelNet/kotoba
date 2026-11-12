@@ -116,7 +116,8 @@ function freshState() {
     profile: { name: '', about: '', goal: 'N4', exam: '', avatar: { type: 'auto', char: '学', color: '#d1453b' } },
     photo: '',
     daily: { day: -1, new: {}, reviews: 0 },
-    settings: { newPerDay, tts: true },
+    settings: { newPerDay, tts: true, remind: 8 },
+    intro: false,
     streak: { last: -1, count: 0 },
   };
 }
@@ -133,6 +134,7 @@ function normalize(s) {
     daily: { ...f.daily, ...(s.daily || {}) },
     settings: { ...f.settings, ...(s.settings || {}), newPerDay: { ...f.settings.newPerDay, ...((s.settings || {}).newPerDay || {}) } },
     streak: { ...f.streak, ...(s.streak || {}) },
+    intro: !!s.intro,
   };
 }
 
@@ -636,12 +638,15 @@ function answer(g) {
   s.pos++; s.revealed = false;
   haptic(g === 0 ? 'heavy' : 'light');
   Store.save(S);
+  ping();
   renderCard();
 }
 
 // В тренировке интервалы не растут; забытая карточка ставится в повторения на сегодня
 function answerPractice(ok) {
   const s = session, id = s.queue[s.pos], st = S.cards[id];
+  rollDay(S, s.today);
+  S.daily.pr = (S.daily.pr || 0) + 1;
   if (!ok) {
     if (st.d > s.today) S.cards[id] = { ...st, d: s.today };
     requeue(s, id);
@@ -651,12 +656,14 @@ function answerPractice(ok) {
   s.pos++; s.revealed = false;
   haptic(ok ? 'light' : 'heavy');
   Store.save(S);
+  ping();
   renderCard();
 }
 
 function renderFinish() {
   const s = session;
   Store.save(S, true);
+  ping(true);
   const acc = s.answered ? Math.round(s.correct / s.answered * 100) : 100;
   setBack(renderHome);
   $app().innerHTML = `<div class="finish">
@@ -830,6 +837,92 @@ function timeStats(state) {
   let last7 = 0; for (let d = today - 6; d <= today; d++) last7 += daySum(state, d);
   return { today: daySum(state, today), week, avg7: last7 / Math.min(7, tracked), avgAll: total / tracked, total, tracked, start };
 }
+/* ================= Сервер: статистика, напоминания, отзывы ================= */
+const CONFIG = (typeof window !== 'undefined' && window.KOTOBA_CONFIG) || {};
+const API_URL = String(CONFIG.api || '').replace(/\/+$/, '');
+const PING_EVERY = 5 * 60000; // не чаще раза в 5 минут, чтобы не упираться в лимиты бесплатного сервера
+let lastPing = 0, pingTimer = null;
+function answersToday() {
+  return S.daily.day === dayNumber() ? (S.daily.reviews || 0) + (S.daily.pr || 0) : 0;
+}
+function ping(force = false) {
+  const tg = TG();
+  if (!API_URL || !tg || !S) return;
+  const now = Date.now();
+  if (!force && now - lastPing < PING_EVERY) {
+    if (!pingTimer) pingTimer = setTimeout(() => { pingTimer = null; ping(true); }, PING_EVERY - (now - lastPing));
+    return;
+  }
+  if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+  lastPing = now;
+  const remind = S.settings.remind;
+  try {
+    // text/plain — без предварительного CORS-запроса
+    fetch(API_URL + '/ping', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ initData: tg.initData, answers: answersToday(), tz: -new Date().getTimezoneOffset(), hour: remind >= 0 ? remind : null }) })
+      .catch(() => {});
+  } catch (e) {}
+}
+async function sendFeedback(text) {
+  const tg = TG();
+  if (!API_URL || !tg) return false;
+  try {
+    const r = await fetch(API_URL + '/feedback', { method: 'POST', headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ initData: tg.initData, text }) });
+    return (await r.json()).ok === true;
+  } catch (e) { return false; }
+}
+function openLink(url) {
+  const tg = TG();
+  try { if (/^https:\/\/t\.me\//.test(url) && tg) return tg.openTelegramLink(url); if (tg) return tg.openLink(url); } catch (e) {}
+  window.open(url, '_blank');
+}
+
+function renderFeedback() {
+  setTabs('profile');
+  setBack(renderProfile);
+  $app().innerHTML = `<div class="row"><button class="linkbtn" id="fback">← Профиль</button></div>
+    <h2>Написать разработчику</h2>
+    <p class="muted small">Нашёл ошибку в слове, чего-то не хватает или просто понравилось — пиши. Сообщение придёт разработчику в Telegram, ответ придёт в чат с ботом.</p>
+    <textarea id="ftext" rows="6" maxlength="3000" placeholder="Твоё сообщение"></textarea>
+    <button class="btn primary big" id="fsend">Отправить</button>
+    <p class="muted small" id="fmsg" aria-live="polite"></p>`;
+  document.getElementById('fback').onclick = renderProfile;
+  const btn = document.getElementById('fsend'), msg = document.getElementById('fmsg'), ta = document.getElementById('ftext');
+  btn.onclick = async () => {
+    const text = ta.value.trim();
+    if (!text) { msg.textContent = 'Напиши хоть пару слов 🙂'; return; }
+    btn.disabled = true; msg.textContent = 'Отправляю…';
+    const ok = await sendFeedback(text);
+    btn.disabled = false;
+    if (ok) { ta.value = ''; msg.textContent = 'Спасибо! Сообщение отправлено 🙏'; haptic('light'); }
+    else msg.textContent = 'Не получилось отправить. Можно написать прямо в чат с ботом — сообщение тоже дойдёт.';
+  };
+}
+
+// Приветствие при первом запуске
+function renderIntro() {
+  setBack(null);
+  const tabs = document.getElementById('tabs'); if (tabs) tabs.hidden = true;
+  $app().innerHTML = `<div class="intro">
+    <div class="big-emoji">🗾</div>
+    <h2>Котоба</h2>
+    <p>Японский с нуля — по паре минут в день.</p>
+    <ol class="intro-list">
+      <li><b>Сначала кана.</b> Хирагана, потом катакана. Слова и кандзи откроются по ходу.</li>
+      <li><b>Новая карточка</b> сначала показывается с ответом, потом проверяется в том же занятии.</li>
+      <li><b>Оценивай честно:</b> «Снова», если не вспомнил. Забытое вернётся, выученное будет появляться всё реже.</li>
+      <li><b>Каждый день понемногу</b> лучше, чем час раз в неделю. Бот утром пришлёт напоминание.</li>
+    </ol>
+    <button class="btn primary big" id="istart">Начать</button>
+  </div>`;
+  document.getElementById('istart').onclick = () => {
+    S.intro = true; Store.save(S, true);
+    if (tabs) tabs.hidden = false;
+    haptic('light'); renderHome();
+  };
+}
+
 let profileManualLog = [];
 function updateProfileNumbers() {
   const st = timeStats(S);
@@ -919,8 +1012,14 @@ function renderProfile() {
     <div class="addtime">${[10, 15, 30, 60].map(m => `<button class="btn" data-min="${m}">+${m} мин</button>`).join('')}</div>
     <div class="row gap"><input type="number" id="pmin" class="search" min="1" max="600" inputmode="numeric" placeholder="Своё время, мин"><button class="btn" id="padd">Добавить</button></div>
     <p class="muted small" id="pmsg" aria-live="polite"></p>
+    ${API_URL || CONFIG.donate ? `<div class="plinks">
+      ${API_URL && TG() ? `<button class="btn" id="pfeed">💬 Написать разработчику</button>` : ''}
+      ${CONFIG.donate ? `<button class="btn" id="pdonate">♥ Поддержать проект</button>` : ''}
+    </div>` : ''}
     <div id="sync" class="muted small center"></div>`;
   updateSyncBadge();
+  const pf = document.getElementById('pfeed'); if (pf) pf.onclick = () => { haptic('light'); renderFeedback(); };
+  const pd = document.getElementById('pdonate'); if (pd) pd.onclick = () => openLink(CONFIG.donate);
   document.getElementById('psettings').onclick = () => { haptic('light'); renderSettings(); };
   document.getElementById('pedit').onclick = renderProfileEdit;
   const add = min => {
@@ -1043,6 +1142,11 @@ function renderSettings() {
     <button class="btn primary big" id="save">Сохранить</button>
     <p class="muted small" id="saved" hidden>Сохранено ✓</p>
     <label class="set-row"><span>Озвучивать карточки</span><input type="checkbox" id="tts" ${S.settings.tts ? 'checked' : ''}></label>
+    ${API_URL ? `<label class="set-row"><span>Напоминание от бота</span><select id="remind">
+      <option value="-1"${S.settings.remind < 0 ? ' selected' : ''}>выключено</option>
+      ${Array.from({ length: 18 }, (_, i) => i + 5).map(h => `<option value="${h}"${S.settings.remind === h ? ' selected' : ''}>в ${h}:00</option>`).join('')}
+    </select></label>
+    <p class="muted small">Напоминание не придёт, если в этот день ты уже занимался. Чтобы бот мог писать, нажми у него «Старт».</p>` : ''}
     <p class="muted small">Колоды открываются по очереди: катакана и слова — после всей хираганы, кандзи — после всей катаканы. Слова на катакане появятся, когда пройдёшь катакану.</p>
     <h3>Резервная копия</h3>
     <p class="muted small">Прогресс хранится в облаке Telegram. Для надёжности можно скопировать его текстом.</p>
@@ -1063,6 +1167,8 @@ function renderSettings() {
     setTimeout(() => { s.hidden = true; }, 1500);
   };
   document.getElementById('tts').onchange = e => { S.settings.tts = e.target.checked; Store.save(S); };
+  const rem = document.getElementById('remind');
+  if (rem) rem.onchange = () => { S.settings.remind = parseInt(rem.value, 10); Store.save(S, true); ping(true); };
   const ta = document.getElementById('backup');
   document.getElementById('export').onclick = () => {
     ta.value = JSON.stringify(S); ta.select();
@@ -1097,6 +1203,7 @@ async function boot() {
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
   window.addEventListener('pagehide', () => { if (S) Store.save(S, true); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && S) ping(true); });
   const nav = document.getElementById('tabs');
   if (nav) nav.onclick = e => {
     const b = e.target.closest('button'); if (!b) return;
@@ -1104,7 +1211,10 @@ async function boot() {
     haptic('light');
     openTab(b.dataset.tab);
   };
-  renderHome();
+  ping(true);
+  // приветствие — только совсем новым пользователям
+  if (!S.intro && Object.keys(S.cards).length === 0) renderIntro();
+  else { if (!S.intro) { S.intro = true; Store.save(S); } renderHome(); }
 }
 
 if (typeof document !== 'undefined') boot();

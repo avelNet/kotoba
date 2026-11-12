@@ -2,17 +2,19 @@ name: Daily reminder
 
 on:
   schedule:
-    # 00:47 UTC = 07:47 по Новосибирску. GitHub иногда запускает с опозданием на 5–30 минут.
-    - cron: '47 0 * * *'
+    # Каждый час: сервер сам решает, кому сейчас 8 утра (или другой выбранный час).
+    # Пока сервер не подключён, напоминание уходит одно — в 00:xx UTC (07:xx Новосибирск).
+    - cron: '47 * * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'remind — отправить напоминание, setup — поставить кнопку меню'
+        description: 'remind — разослать напоминания, setup — вебхук и кнопка меню, stats — статистика в лог'
         default: remind
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,4 +24,8 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           APP_URL: ${{ vars.APP_URL }}
+          API_URL: ${{ vars.API_URL }}
+          FORCED: ${{ github.event_name == 'workflow_dispatch' }}
