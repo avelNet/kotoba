@@ -748,7 +748,9 @@ function renderDict() {
     const msg = t => { document.getElementById('amsg').textContent = t; };
     document.getElementById('aadd').onclick = () => {
       const r = addWords([[document.getElementById('ak').value, document.getElementById('ar').value, document.getElementById('aj').value, document.getElementById('ac').value]]);
-      if (r.added + r.pulled) { renderDict(); msg2(r); } else msg(r.note || 'Нужно заполнить кану и перевод');
+      if (r.added + r.pulled) { renderDict(); msg2(r); }
+      else if (r.dups.length) { msg(`Такое слово уже есть: ${r.dups[0]}`); haptic('heavy'); }
+      else msg(r.note || 'Нужно заполнить кану и перевод');
     };
     document.getElementById('abulkadd').onclick = () => {
       const rows = parseBulk(document.getElementById('abulk').value);
@@ -761,7 +763,8 @@ function renderDict() {
     const parts = [];
     if (r.added) parts.push(`добавлено: ${r.added} (в изучение пойдут по лимиту «Мои слова: новых в день»)`);
     if (r.pulled) parts.push(`уже были в колоде «Слова», поставил в изучение: ${r.pulled}`);
-    if (r.skipped) parts.push(`пропущено (уже учишь или пустые строки): ${r.skipped}`);
+    if (r.dups.length) parts.push(`уже есть в списке, не добавил: ${r.dups.join('; ')}`);
+    if (r.skipped) parts.push(`пропущено (пустые строки или уже учишь): ${r.skipped}`);
     const el = document.getElementById('amsg'); if (el) el.textContent = parts.join(' · ');
     haptic('light');
   };
@@ -796,6 +799,13 @@ function renderDict() {
       box.querySelector('[data-act=save]').onclick = () => {
         const v = f => cleanField(box.querySelector(`[data-f=${f}]`).value);
         if (!v('k') || !v('r')) { box.querySelector('[data-f=k]').focus(); return; }
+        const dup = findDuplicate(v('k'), v('j'), w.id);
+        if (dup) {
+          let m = box.querySelector('.emsg');
+          if (!m) { m = document.createElement('p'); m.className = 'muted small emsg'; box.appendChild(m); }
+          m.textContent = `Такое слово уже есть: ${dup.k} — ${dup.r}. Если это другое слово с тем же чтением, укажи кандзи.`;
+          haptic('heavy'); return;
+        }
         w.k = v('k'); w.r = v('r'); w.j = v('j');
         if (v('c')) w.c = v('c'); else delete w.c;
         setCustom(S.custom, S); Store.save(S, true); haptic('light'); renderDict();
@@ -834,11 +844,17 @@ function parseBulk(text) {
   return rows;
 }
 
+// Дубль: та же кана, и кандзи совпадает или у одного из слов его нет.
+// Омонимы с разными кандзи (はし 橋 / 箸) — разрешены.
+function findDuplicate(k, j, exceptId = null) {
+  return S.custom.find(w => w.id !== exceptId && w.k === k && (!j || !w.j || w.j === j)) || null;
+}
+
 // Добавление своих слов: rows = [[кана, перевод, кандзи, категория], ...]
 // Новые слова встают в очередь и идут в изучение по лимиту «Мои слова: новых в день»
 function addWords(rows) {
   const today = dayNumber();
-  const res = { added: 0, pulled: 0, skipped: 0 };
+  const res = { added: 0, pulled: 0, skipped: 0, dups: [] };
   for (const row of rows) {
     const k = cleanField(row[0]), r = cleanField(row[1]), j = cleanField(row[2]), c = cleanField(row[3]);
     if (!k || !r) { res.skipped++; continue; }
@@ -847,7 +863,8 @@ function addWords(rows) {
       if (S.cards[built.id]) { res.skipped++; continue; }
       S.cards[built.id] = newCardState(today); res.pulled++; continue;
     }
-    if (S.custom.some(w => w.k === k && w.r.toLowerCase() === r.toLowerCase())) { res.skipped++; continue; }
+    const dup = findDuplicate(k, j);
+    if (dup) { res.dups.push(`${dup.k}${dup.j ? ' (' + dup.j + ')' : ''} — ${dup.r}`); continue; }
     const id = 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     S.custom.push({ id, k, j, r, ...(c ? { c } : {}) });
     res.added++;
@@ -1296,4 +1313,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
