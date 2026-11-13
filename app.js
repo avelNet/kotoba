@@ -237,7 +237,8 @@ function practiceQueue(state, filter, size = 20) {
     // карточка только показана, но ещё ни разу не проверялась — ей место в обычном занятии, не в тренировке
     if (!(st.r > 0)) continue;
     if (builtinOff && (c.deck === 'words' || (c.deck === 'wk' && c.src && c.src.startsWith('w:')))) continue;
-    if (filter === 'hard' ? !(st.l > 0 || st.e < 230 || st.i <= 1) : (filter !== 'all' && c.deck !== filter)) continue;
+    if (filter === 'rj') { if (c.deck !== 'words' && c.deck !== 'mine') continue; }
+    else if (filter === 'hard' ? !(st.l > 0 || st.e < 230 || st.i <= 1) : (filter !== 'all' && c.deck !== filter)) continue;
     pool.push({ id, w: st.l * 3 + 10 / (st.i + 1) + Math.random() * 4 });
   }
   pool.sort((a, b) => b.w - a.w);
@@ -564,8 +565,10 @@ function renderPracticePicker() {
   const opts = [{ key: 'all', name: 'Всё вперемешку', n: count('all') }, { key: 'hard', name: 'Сложные карточки', n: count('hard') }];
   for (const d of DECKS) opts.push({ key: d.key, name: d.name, n: count(d.key) });
   const shown = opts.filter(o => o.n > 0);
+  const rj = count('rj');
   $app().innerHTML = `<h2>Повторить изученное</h2>
     <p class="muted small">Свободная тренировка в любое время, до 20 карточек за раз. Расписание повторений не сдвигается, а если что-то забыл — карточка вернётся в ближайшие повторения.</p>
+    ${rj ? `<button class="btn big pick rjpick" data-k="rj"><span>✍️ С русского на японский<span class="muted small rjsub">видишь перевод — пишешь слово каной</span></span><span class="muted">${rj}</span></button>` : ''}
     ${shown.length ? shown.map(o => `<button class="btn big pick" data-k="${o.key}"><span>${esc(o.name)}</span><span class="muted">${o.n}</span></button>`).join('')
       : `<div class="done muted">Пока нечего повторять. Карточка появится здесь, когда ты хотя бы раз ответишь на неё в обычном занятии.</div>
          <button class="btn big" id="pback">На главную</button>`}`;
@@ -576,7 +579,7 @@ function renderPracticePicker() {
 function startPractice(filter) {
   const queue = practiceQueue(S, filter);
   if (!queue.length) { renderPracticePicker(); return; }
-  session = { queue, pos: 0, today: dayNumber(), answered: 0, correct: 0, revealed: false, practice: true };
+  session = { queue, pos: 0, today: dayNumber(), answered: 0, correct: 0, revealed: false, practice: true, reverse: filter === 'rj' };
   setTabs(null);
   setBack(() => { Store.save(S, true); renderHome(); });
   renderCard();
@@ -611,6 +614,7 @@ function renderCard() {
     <div class="muted small row"><span>${esc(deckName)}${isNew ? ' · <b class="accent">новое</b>' : ''}</span><span>осталось ${left} ${plural(left, 'показ', 'показа', 'показов')}</span></div></div>`;
   const sound = S.settings.tts && speakText(c) ? `<button class="icon" id="say" aria-label="Озвучить">🔊</button>` : '';
 
+  if (s.reverse) return renderReverse(s, id, c, head);
   if (isNew) {
     // Знакомство: показываем сразу с ответом, проверим чуть позже в этом же занятии
     $app().innerHTML = `${head}<div class="card">${sound}${cardFront(c)}<div class="sep"></div>${cardBack(c)}</div>
@@ -644,6 +648,50 @@ function renderCard() {
   }
   const say = document.getElementById('say');
   if (say) say.onclick = e => { e.stopPropagation(); speak(speakText(c)); };
+}
+
+// Обратный режим (RU → JP): показываем перевод, слово нужно написать каной (или кандзи).
+// Сравнение мягкое: без пробелов и знаков препинания, полуширинные/полноширинные символы приводятся к одному виду.
+function normAnswer(t) {
+  return String(t || '').normalize('NFKC').replace(/[\s。、.,!?！？・~〜「」()（）]/g, '').toLowerCase();
+}
+function checkTyped(c, typed) {
+  const t = normAnswer(typed);
+  if (!t) return false;
+  return [c.front, c.kanji].some(v => v && normAnswer(v) === t);
+}
+function renderReverse(s, id, c, head) {
+  const front = `<div class="front word rjq" style="--len:${Math.max(6, [...(c.ru || '')].length / 1.6)}">${esc(c.ru)}</div>`;
+  if (!s.revealed) {
+    $app().innerHTML = `${head}<div class="card">${front}<div class="sep"></div>
+        <input id="tin" class="search tinput" lang="ja" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Напиши каной" enterkeyhint="done">
+      </div>
+      <div class="actions"><button class="btn big g0half" id="tgive">Не помню</button><button class="btn primary big" id="tcheck">Проверить</button></div>`;
+    const inp = document.getElementById('tin');
+    const check = () => { s.typed = inp.value; s.ok = checkTyped(c, inp.value); s.revealed = true; renderCard(); };
+    document.getElementById('tcheck').onclick = () => { if (inp.value.trim()) check(); else inp.focus(); };
+    document.getElementById('tgive').onclick = () => { s.typed = ''; s.ok = false; s.revealed = true; renderCard(); };
+    inp.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing && inp.value.trim()) { e.preventDefault(); check(); } };
+    setTimeout(() => inp.focus(), 50);
+    return;
+  }
+  const sound = S.settings.tts ? `<button class="icon" id="say" aria-label="Озвучить">🔊</button>` : '';
+  const verdict = s.ok ? `<div class="tverdict ok">✓ Верно</div>`
+    : s.typed ? `<div class="tverdict bad">✗ Ты написал: <span class="jp">${esc(s.typed)}</span></div>`
+    : `<div class="tverdict bad">Правильный ответ:</div>`;
+  $app().innerHTML = `${head}<div class="card">${sound}${front}<div class="sep"></div>${verdict}
+      <div class="front word" style="--len:${Math.max(4, [...c.front].length)}">${esc(c.front)}</div>
+      ${c.kanji ? `<div class="kanji-form">${esc(c.kanji)}</div>` : ''}</div>
+    <div class="actions">${s.ok
+      ? `<button class="btn primary big" id="tnext">Дальше</button>`
+      : `${s.typed ? `<button class="btn big" id="tforce">Засчитать</button>` : ''}<button class="btn primary big" id="tnext">Дальше</button>`}</div>`;
+  if (S.settings.tts) speak(c.front);
+  haptic(s.ok ? 'light' : 'heavy');
+  const say = document.getElementById('say');
+  if (say) say.onclick = () => speak(c.front);
+  const go = ok => { s.typed = ''; answerPractice(ok); };
+  document.getElementById('tnext').onclick = () => go(!!s.ok);
+  const f = document.getElementById('tforce'); if (f) f.onclick = () => go(true);
 }
 
 function requeue(s, id) {
@@ -1302,4 +1350,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { normAnswer, checkTyped, findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
