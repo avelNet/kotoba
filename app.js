@@ -191,6 +191,7 @@ function dueIds(state, today, deckKey, cat = null) {
   for (const id in state.cards) {
     const c = BY_ID[id];
     if (!c || (deckKey && c.deck !== deckKey)) continue;
+    if (builtinOff && (c.deck === 'words' || (c.deck === 'wk' && c.src && c.src.startsWith('w:')))) continue;
     if (cat != null && c.cat !== cat) continue;
     if (state.cards[id].d <= today) out.push(id);
   }
@@ -235,6 +236,7 @@ function practiceQueue(state, filter, size = 20) {
     const st = state.cards[id];
     // карточка только показана, но ещё ни разу не проверялась — ей место в обычном занятии, не в тренировке
     if (!(st.r > 0)) continue;
+    if (builtinOff && (c.deck === 'words' || (c.deck === 'wk' && c.src && c.src.startsWith('w:')))) continue;
     if (filter === 'hard' ? !(st.l > 0 || st.e < 230 || st.i <= 1) : (filter !== 'all' && c.deck !== filter)) continue;
     pool.push({ id, w: st.l * 3 + 10 / (st.i + 1) + Math.random() * 4 });
   }
@@ -740,6 +742,7 @@ function renderDict() {
       <datalist id="cats">${categories().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <button class="btn primary big" id="aadd">Добавить слово</button>
       <details class="bulk"><summary>Вставить списком</summary>
+        ${S.settings.builtin !== false ? `<p class="muted small warn">Включён встроенный набор слов: слова, которые в нём уже есть, не попадут в «Мои», а встанут в изучение из него (без категорий). Чтобы все слова были твоими, выключи набор в настройках.</p>` : ''}
         <p class="muted small">Каждое слово с новой строки: <b>кана|перевод|кандзи</b>. Кандзи можно не писать. Строка <b># Название</b> задаёт категорию для слов ниже.</p>
         <textarea id="abulk" rows="5" placeholder="# Числа&#10;いち|один|一&#10;に|два|二"></textarea>
         <button class="btn big" id="abulkadd">Добавить список</button>
