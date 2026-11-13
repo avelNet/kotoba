@@ -10,9 +10,11 @@ const DECKS = [
   { key: 'kanji', name: 'Кандзи',   needs: 'kata', defNew: 3 },
   { key: 'wk',    name: 'Слова в кандзи', needs: 'kata', defNew: 10 },
   { key: 'mine',  name: 'Мои слова', needs: null,  defNew: 10 },
+  { key: 'rev',   name: 'Слова: RU → JP', needs: null, defNew: 10 },
 ];
 DATA.mine = [];
 DATA.wk = [];
+DATA.rev = [];
 const BY_ID = {};
 for (const d of DECKS) for (const c of DATA[d.key]) BY_ID[c.id] = c;
 
@@ -42,6 +44,7 @@ let builtinOff = false; // выключен ли встроенный набор
 const syncBuiltin = st => { builtinOff = !!(st && st.settings && st.settings.builtin === false); };
 const wordSources = () => builtinOff ? DATA.mine : [...DATA.words, ...DATA.mine];
 function rebuildWK() {
+  rebuildRev();
   for (const c of DATA.wk) delete BY_ID[c.id];
   const seen = new Set();
   DATA.wk = [];
@@ -53,6 +56,25 @@ function rebuildWK() {
   }
   for (const c of DATA.wk) BY_ID[c.id] = c;
 }
+// «Слова: RU → JP»: для каждого слова — обратная карточка «перевод → написать каной».
+// Открывается, когда само слово хотя бы раз вспомнено в обычном направлении.
+function rebuildRev() {
+  for (const c of DATA.rev) delete BY_ID[c.id];
+  const seen = new Set();
+  DATA.rev = [];
+  for (const w of wordSources()) {
+    const id = 'r:' + w.id;
+    if (seen.has(id)) continue; seen.add(id);
+    DATA.rev.push({ id, deck: 'rev', front: w.ru, ru: w.ru, kana: w.front, kanji: w.kanji || '', src: w.id });
+  }
+  for (const c of DATA.rev) BY_ID[c.id] = c;
+}
+function revEligible(state, c) {
+  const src = state.cards[c.src];
+  return !!(src && src.r >= 1);
+}
+// Карточки встроенного набора слов (и производные от них) скрыты, когда набор выключен
+const hiddenByBuiltin = c => builtinOff && (c.deck === 'words' || ((c.deck === 'wk' || c.deck === 'rev') && c.src && c.src.startsWith('w:')));
 rebuildWK();
 // Карточка слова в кандзи открывается, когда само слово уже знакомо и все его кандзи пройдены в колоде «Кандзи»
 function wkEligible(state, c) {
@@ -176,6 +198,8 @@ function newAvailable(state, deck, extra = 0, cat = null) {
   if (deck.key === 'kanji') list = kanjiOrder(state);
   if (deck.key === 'wk') list = DATA.wk.filter(c => !state.cards[c.id] && wkEligible(state, c))
     .sort((a, b) => (state.cards[b.src].i || 0) - (state.cards[a.src].i || 0));
+  if (deck.key === 'rev') list = DATA.rev.filter(c => !state.cards[c.id] && revEligible(state, c))
+    .sort((a, b) => (state.cards[b.src].i || 0) - (state.cards[a.src].i || 0));
   for (const c of list) {
     if (left <= 0) break;
     if (state.cards[c.id]) continue;
@@ -191,7 +215,7 @@ function dueIds(state, today, deckKey, cat = null) {
   for (const id in state.cards) {
     const c = BY_ID[id];
     if (!c || (deckKey && c.deck !== deckKey)) continue;
-    if (builtinOff && (c.deck === 'words' || (c.deck === 'wk' && c.src && c.src.startsWith('w:')))) continue;
+    if (hiddenByBuiltin(c)) continue;
     if (cat != null && c.cat !== cat) continue;
     if (state.cards[id].d <= today) out.push(id);
   }
@@ -236,7 +260,7 @@ function practiceQueue(state, filter, size = 20) {
     const st = state.cards[id];
     // карточка только показана, но ещё ни разу не проверялась — ей место в обычном занятии, не в тренировке
     if (!(st.r > 0)) continue;
-    if (builtinOff && (c.deck === 'words' || (c.deck === 'wk' && c.src && c.src.startsWith('w:')))) continue;
+    if (hiddenByBuiltin(c)) continue;
     if (filter === 'rj') { if (c.deck !== 'words' && c.deck !== 'mine') continue; }
     else if (filter === 'hard' ? !(st.l > 0 || st.e < 230 || st.i <= 1) : (filter !== 'all' && c.deck !== filter)) continue;
     pool.push({ id, w: st.l * 3 + 10 / (st.i + 1) + Math.random() * 4 });
@@ -507,6 +531,7 @@ function renderHome() {
     const wkReady = d.key === 'wk' ? DATA.wk.filter(c => S.cards[c.id] || wkEligible(S, c)).length : 0;
     const status = d.key === 'mine' && !total ? 'добавь свои слова во вкладке «Словарь»'
       : d.key === 'wk' && unlocked && !wkReady ? 'появятся, когда пройдёшь кандзи из знакомых слов'
+      : d.key === 'rev' && !intro && !nw ? 'появятся, когда вспомнишь слова в обычном направлении'
       : !unlocked ? `🔒 после «${esc(needName)}»`
       : intro === total ? `пройдено, повторений: ${due}`
       : `новых: ${nw} · повторить: ${due}`;
@@ -599,7 +624,7 @@ function cardBack(c) {
     <div class="readings">${c.on ? `<div><span class="tag">он</span> ${esc(c.on)}</div>` : ''}${c.kun ? `<div><span class="tag">кун</span> ${esc(c.kun)}</div>` : ''}</div>
     ${ex ? `<div class="examples">${ex}</div>` : ''}`;
 }
-const speakText = c => c.deck === 'kanji' ? '' : c.deck === 'wk' ? c.kana : c.front;
+const speakText = c => c.deck === 'kanji' ? '' : (c.deck === 'wk' || c.deck === 'rev') ? c.kana : c.front;
 
 function renderCard() {
   const s = session;
@@ -608,13 +633,13 @@ function renderCard() {
   const deckName = DECKS.find(d => d.key === c.deck).name;
   // Оставшиеся показы: всё, что в очереди, плюс будущая проверка для ещё не показанных новых карточек
   const rest = s.queue.slice(s.pos);
-  const left = rest.length + new Set(rest.filter(x => !S.cards[x])).size;
+  const left = rest.length + new Set(rest.filter(x => !S.cards[x] && !x.startsWith('r:'))).size;
   const isNew = !st;
   const head = `<div class="progress"><div class="bar"><i style="width:${(s.pos / (s.pos + left) * 100).toFixed(1)}%"></i></div>
     <div class="muted small row"><span>${esc(deckName)}${isNew ? ' · <b class="accent">новое</b>' : ''}</span><span>осталось ${left} ${plural(left, 'показ', 'показа', 'показов')}</span></div></div>`;
   const sound = S.settings.tts && speakText(c) ? `<button class="icon" id="say" aria-label="Озвучить">🔊</button>` : '';
 
-  if (s.reverse) return renderReverse(s, id, c, head);
+  if (s.reverse || c.deck === 'rev') return renderReverse(s, id, c, head);
   if (isNew) {
     // Знакомство: показываем сразу с ответом, проверим чуть позже в этом же занятии
     $app().innerHTML = `${head}<div class="card">${sound}${cardFront(c)}<div class="sep"></div>${cardBack(c)}</div>
@@ -655,10 +680,11 @@ function renderCard() {
 function normAnswer(t) {
   return String(t || '').normalize('NFKC').replace(/[\s。、.,!?！？・~〜「」()（）]/g, '').toLowerCase();
 }
+const jpOf = c => c.deck === 'rev' ? c.kana : c.front;
 function checkTyped(c, typed) {
   const t = normAnswer(typed);
   if (!t) return false;
-  return [c.front, c.kanji].some(v => v && normAnswer(v) === t);
+  return [jpOf(c), c.kanji].some(v => v && normAnswer(v) === t);
 }
 function renderReverse(s, id, c, head) {
   const front = `<div class="front word rjq" style="--len:${Math.max(6, [...(c.ru || '')].length / 1.6)}">${esc(c.ru)}</div>`;
@@ -668,9 +694,16 @@ function renderReverse(s, id, c, head) {
       </div>
       <div class="actions"><button class="btn big g0half" id="tgive">Не помню</button><button class="btn primary big" id="tcheck">Проверить</button></div>`;
     const inp = document.getElementById('tin');
-    const check = () => { s.typed = inp.value; s.ok = checkTyped(c, inp.value); s.revealed = true; renderCard(); };
+    // новая обратная карточка сразу проверяется (слово уже знакомо), поэтому заводим её при первом ответе
+    const touch = () => {
+      if (S.cards[id]) return;
+      S.cards[id] = newCardState(s.today);
+      rollDay(S, s.today);
+      S.daily.new[c.deck] = (S.daily.new[c.deck] || 0) + 1;
+    };
+    const check = () => { touch(); s.typed = inp.value; s.ok = checkTyped(c, inp.value); s.revealed = true; renderCard(); };
     document.getElementById('tcheck').onclick = () => { if (inp.value.trim()) check(); else inp.focus(); };
-    document.getElementById('tgive').onclick = () => { s.typed = ''; s.ok = false; s.revealed = true; renderCard(); };
+    document.getElementById('tgive').onclick = () => { touch(); s.typed = ''; s.ok = false; s.revealed = true; renderCard(); };
     inp.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing && inp.value.trim()) { e.preventDefault(); check(); } };
     setTimeout(() => inp.focus(), 50);
     return;
@@ -679,16 +712,30 @@ function renderReverse(s, id, c, head) {
   const verdict = s.ok ? `<div class="tverdict ok">✓ Верно</div>`
     : s.typed ? `<div class="tverdict bad">✗ Ты написал: <span class="jp">${esc(s.typed)}</span></div>`
     : `<div class="tverdict bad">Правильный ответ:</div>`;
-  $app().innerHTML = `${head}<div class="card">${sound}${front}<div class="sep"></div>${verdict}
-      <div class="front word" style="--len:${Math.max(4, [...c.front].length)}">${esc(c.front)}</div>
-      ${c.kanji ? `<div class="kanji-form">${esc(c.kanji)}</div>` : ''}</div>
-    <div class="actions">${s.ok
+  const jp = jpOf(c);
+  const graded = !s.practice;
+  let actions;
+  if (graded) {
+    // обычное занятие: оценка как у остальных карточек; при ошибке подсвечиваем «Снова»
+    const st = S.cards[id], labels = ['Снова', 'Трудно', 'Хорошо', 'Легко'];
+    actions = `<div class="actions grades${s.ok ? '' : ' wrong'}">${labels.map((l, g) => `<button class="btn grade g${g}" data-g="${g}"><b>${l}</b><span>${fmtInterval(schedule(st, g, s.today))}</span></button>`).join('')}</div>`;
+  } else {
+    actions = `<div class="actions">${s.ok
       ? `<button class="btn primary big" id="tnext">Дальше</button>`
       : `${s.typed ? `<button class="btn big" id="tforce">Засчитать</button>` : ''}<button class="btn primary big" id="tnext">Дальше</button>`}</div>`;
-  if (S.settings.tts) speak(c.front);
+  }
+  $app().innerHTML = `${head}<div class="card">${sound}${front}<div class="sep"></div>${verdict}
+      <div class="front word" style="--len:${Math.max(4, [...jp].length)}">${esc(jp)}</div>
+      ${c.kanji ? `<div class="kanji-form">${esc(c.kanji)}</div>` : ''}</div>
+    ${actions}`;
+  if (S.settings.tts) speak(jp);
   haptic(s.ok ? 'light' : 'heavy');
   const say = document.getElementById('say');
-  if (say) say.onclick = () => speak(c.front);
+  if (say) say.onclick = () => speak(jp);
+  if (graded) {
+    $app().querySelectorAll('.grade').forEach(b => b.onclick = () => { s.typed = ''; answer(+b.dataset.g); });
+    return;
+  }
   const go = ok => { s.typed = ''; answerPractice(ok); };
   document.getElementById('tnext').onclick = () => go(!!s.ok);
   const f = document.getElementById('tforce'); if (f) f.onclick = () => go(true);
@@ -851,7 +898,7 @@ function renderDict() {
       e.stopPropagation();
       if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Удалить?'; return; }
       S.custom = S.custom.filter(w => w.id !== b.dataset.id);
-      delete S.cards[b.dataset.id];
+      for (const pre of ['', 'r:', 'x:']) delete S.cards[pre + b.dataset.id];
       setCustom(S.custom, S); Store.save(S, true); renderDict();
     });
   };
@@ -1293,10 +1340,10 @@ function renderSettings() {
     if (!wr.classList.contains('armed')) { wr.classList.add('armed'); wr.textContent = 'Точно? Нажми ещё раз'; return; }
     for (const id of Object.keys(S.cards)) {
       const c = BY_ID[id];
-      if (!c || c.deck === 'words' || c.deck === 'mine' || c.deck === 'wk') delete S.cards[id];
+      if (!c || c.deck === 'words' || c.deck === 'mine' || c.deck === 'wk' || c.deck === 'rev') delete S.cards[id];
     }
     S.custom = []; setCustom(S.custom, S);
-    for (const k of ['words', 'mine', 'wk']) delete S.daily.new[k];
+    for (const k of ['words', 'mine', 'wk', 'rev']) delete S.daily.new[k];
     Store.save(S, true); haptic('heavy');
     wr.textContent = 'Слова убраны ✓'; wr.disabled = true;
   };
@@ -1350,4 +1397,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { normAnswer, checkTyped, findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { revEligible, normAnswer, checkTyped, findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
