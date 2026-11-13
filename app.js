@@ -16,21 +16,36 @@ DATA.wk = [];
 const BY_ID = {};
 for (const d of DECKS) for (const c of DATA[d.key]) BY_ID[c.id] = c;
 
-// Свои слова хранятся в состоянии как {id, k: кана, j: кандзи, r: перевод}
-function setCustom(list) {
+// Свои слова хранятся в состоянии как {id, k: кана, j: кандзи, r: перевод, c: категория}
+function setCustom(list, state) {
+  if (state) syncBuiltin(state);
   for (const c of DATA.mine) delete BY_ID[c.id];
-  DATA.mine = (list || []).map(w => ({ id: w.id, deck: 'mine', front: w.k, kanji: w.j || '', ru: w.r }));
+  DATA.mine = (list || []).map(w => ({ id: w.id, deck: 'mine', front: w.k, kanji: w.j || '', ru: w.r, cat: w.c || '' }));
   for (const c of DATA.mine) BY_ID[c.id] = c;
   rebuildWK();
 }
 // «Слова в кандзи»: для каждого слова с кандзи — отдельная карточка «кандзи → чтение и перевод».
 // Создаются автоматически, ничего вручную исправлять не нужно.
+function categories() {
+  const out = [];
+  for (const c of DATA.mine) if (c.cat && !out.includes(c.cat)) out.push(c.cat);
+  return out;
+}
+// onlyDeck может быть 'mine#Числа' — только одна категория своих слов
+function splitDeck(onlyDeck) {
+  if (!onlyDeck) return [null, null];
+  const i = onlyDeck.indexOf('#');
+  return i < 0 ? [onlyDeck, null] : [onlyDeck.slice(0, i), onlyDeck.slice(i + 1)];
+}
 const isKanjiChar = ch => /[\u4e00-\u9fff\u3005]/.test(ch);
+let builtinOff = false; // выключен ли встроенный набор слов (зеркало S.settings.builtin)
+const syncBuiltin = st => { builtinOff = !!(st && st.settings && st.settings.builtin === false); };
+const wordSources = () => builtinOff ? DATA.mine : [...DATA.words, ...DATA.mine];
 function rebuildWK() {
   for (const c of DATA.wk) delete BY_ID[c.id];
   const seen = new Set();
   DATA.wk = [];
-  for (const w of [...DATA.words, ...DATA.mine]) {
+  for (const w of wordSources()) {
     if (!w.kanji || ![...w.kanji].some(isKanjiChar)) continue;
     const id = 'x:' + w.id;
     if (seen.has(id)) continue; seen.add(id);
@@ -116,7 +131,7 @@ function freshState() {
     profile: { name: '', about: '', goal: 'N4', exam: '', avatar: { type: 'auto', char: '学', color: '#d1453b' } },
     photo: '',
     daily: { day: -1, new: {}, reviews: 0 },
-    settings: { newPerDay, tts: true, remind: 8 },
+    settings: { newPerDay, tts: true, remind: 8, builtin: true },
     intro: false,
     streak: { last: -1, count: 0 },
   };
@@ -150,8 +165,9 @@ function introducedCount(state, deckKey) {
 function deckComplete(state, deckKey) { return introducedCount(state, deckKey) === DATA[deckKey].length; }
 function deckUnlocked(state, deck) { return !deck.needs || deckComplete(state, deck.needs); }
 
-function newAvailable(state, deck, extra = 0) {
+function newAvailable(state, deck, extra = 0, cat = null) {
   if (!deckUnlocked(state, deck)) return [];
+  if (deck.key === 'words' && state.settings.builtin === false) return [];
   const done = state.daily.new[deck.key] || 0;
   let left = (state.settings.newPerDay[deck.key] || 0) - done + extra;
   const kataReady = deckComplete(state, 'kata');
@@ -163,17 +179,19 @@ function newAvailable(state, deck, extra = 0) {
   for (const c of list) {
     if (left <= 0) break;
     if (state.cards[c.id]) continue;
+    if (cat != null && c.cat !== cat) continue;
     if (c.hasKata && !kataReady) continue;
     out.push(c.id); left--;
   }
   return out;
 }
 
-function dueIds(state, today, deckKey) {
+function dueIds(state, today, deckKey, cat = null) {
   const out = [];
   for (const id in state.cards) {
     const c = BY_ID[id];
     if (!c || (deckKey && c.deck !== deckKey)) continue;
+    if (cat != null && c.cat !== cat) continue;
     if (state.cards[id].d <= today) out.push(id);
   }
   return out;
@@ -186,12 +204,13 @@ function shuffle(a) {
 
 function buildQueue(state, today, extra = 0, onlyDeck = null) {
   rollDay(state, today);
-  const due = shuffle(dueIds(state, today, onlyDeck));
+  const [deckKey, cat] = splitDeck(onlyDeck);
+  const due = shuffle(dueIds(state, today, deckKey, cat));
   // новые карточки разных колод чередуем по очереди: кана, слово, кана, слово…
-  const decks = DECKS.filter(d => !onlyDeck || d.key === onlyDeck);
+  const decks = DECKS.filter(d => !deckKey || d.key === deckKey);
   // сначала кандзи-версии уже знакомых слов, потом остальные новые вперемешку
   const wkNews = decks.filter(d => d.key === 'wk').flatMap(d => newAvailable(state, d, extra));
-  const perDeck = decks.filter(d => d.key !== 'wk').map(d => newAvailable(state, d, extra));
+  const perDeck = decks.filter(d => d.key !== 'wk').map(d => newAvailable(state, d, extra, cat));
   const news = [...wkNews];
   for (let i = 0; perDeck.some(l => i < l.length); i++) for (const l of perDeck) if (i < l.length) news.push(l[i]);
   if (!due.length) return news;
@@ -302,7 +321,7 @@ const GROUPS = [
 function serializeCustom(state) {
   const out = []; let cur = '';
   for (const w of state.custom || []) {
-    const line = [w.id, w.k, w.j || '', w.r].map(cleanField).join('\t');
+    const line = [w.id, w.k, w.j || '', w.r, ...(w.c ? [w.c] : [])].map(cleanField).join('\t');
     if (cur && cur.length + line.length + 1 > 3500) { out.push(cur); cur = ''; }
     cur = cur ? cur + '\n' + line : line;
   }
@@ -315,7 +334,7 @@ function parseCustom(chunks) {
     if (!ch) continue;
     for (const line of ch.split('\n')) {
       const p = line.split('\t');
-      if (p.length === 4 && p[0] && p[1] && p[3]) list.push({ id: p[0], k: p[1], j: p[2], r: p[3] });
+      if (p.length >= 4 && p[0] && p[1] && p[3]) list.push({ id: p[0], k: p[1], j: p[2], r: p[3], ...(p[4] ? { c: p[4] } : {}) });
     }
   }
   return list;
@@ -480,7 +499,18 @@ function renderHome() {
   rollDay(S, today);
   const dueAll = dueIds(S, today).length;
   let newAll = 0;
-  const rows = DECKS.map(d => {
+  const catRow = cat => {
+    const items = DATA.mine.filter(c => c.cat === cat);
+    const intro = items.filter(c => S.cards[c.id]).length;
+    const due = dueIds(S, today, 'mine', cat).length;
+    const nw = newAvailable(S, DECKS.find(x => x.key === 'mine'), 0, cat).length;
+    const playable = due + nw > 0;
+    return `<div class="deck sub${playable ? ' playable' : ''}" data-k="mine#${esc(cat)}">
+      <div class="deck-top"><span>${esc(cat)}</span><span class="muted">${intro}/${items.length}</span></div>
+      <div class="bar"><i style="width:${items.length ? (intro / items.length * 100).toFixed(1) : 0}%"></i></div>
+      <div class="muted small">${intro === items.length ? `пройдено, повторений: ${due}` : `новых: ${nw} · повторить: ${due}`}${playable ? ' · <span class="accent">только её ▶</span>' : ''}</div></div>`;
+  };
+  const rows = DECKS.filter(d => !(d.key === 'words' && S.settings.builtin === false)).map(d => {
     const total = DATA[d.key].length, intro = introducedCount(S, d.key);
     const due = dueIds(S, today, d.key).length;
     const nw = newAvailable(S, d).length; newAll += nw;
@@ -496,7 +526,8 @@ function renderHome() {
     return `<div class="deck${unlocked ? '' : ' locked'}${playable ? ' playable' : ''}" data-k="${d.key}">
       <div class="deck-top"><b>${esc(d.name)}</b><span class="muted">${intro}/${total}</span></div>
       <div class="bar"><i style="width:${total ? (intro / total * 100).toFixed(1) : 0}%"></i></div>
-      <div class="muted small">${status}${playable ? ' · <span class="accent">учить только её ▶</span>' : ''}</div></div>`;
+      <div class="muted small">${status}${playable ? ' · <span class="accent">учить только её ▶</span>' : ''}</div></div>`
+      + (d.key === 'mine' ? categories().map(catRow).join('') : '');
   }).join('');
   const tomorrow = dueIds(S, today + 1).length;
   const streak = S.streak.last >= today - 1 ? S.streak.count : 0;
@@ -684,7 +715,7 @@ function strength(i) { return i >= 21 ? 4 : i >= 7 ? 3 : i >= LEARNED_DAYS ? 2 :
 function renderDict() {
   setBack(null);
   setTabs('dict');
-  const all = [...DATA.words, ...DATA.mine].filter(w => S.cards[w.id]).reverse();
+  const all = wordSources().filter(w => S.cards[w.id]).reverse();
   const learned = all.filter(w => S.cards[w.id].i >= LEARNED_DAYS);
   const learning = all.filter(w => S.cards[w.id].i < LEARNED_DAYS);
   const mine = DATA.mine.slice().reverse();
@@ -701,21 +732,22 @@ function renderDict() {
     if (dictState.filter !== 'mine') { box.innerHTML = ''; return; }
     box.innerHTML = `<div class="addbox">
       <div class="addrow"><input id="ak" class="search" placeholder="Кана: えんぴつ" autocomplete="off"><input id="ar" class="search" placeholder="Перевод: карандаш" autocomplete="off"></div>
-      <input id="aj" class="search" placeholder="Кандзи (необязательно): 鉛筆" autocomplete="off">
+      <div class="addrow"><input id="aj" class="search" placeholder="Кандзи (необяз.): 鉛筆" autocomplete="off"><input id="ac" class="search" list="cats" placeholder="Категория (необяз.)" autocomplete="off" value="${esc(dictState.cat || '')}"></div>
+      <datalist id="cats">${categories().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <button class="btn primary big" id="aadd">Добавить слово</button>
       <details class="bulk"><summary>Вставить списком</summary>
-        <p class="muted small">Каждое слово с новой строки: <b>кана|перевод|кандзи</b>. Кандзи можно не писать.</p>
-        <textarea id="abulk" rows="5" placeholder="えんぴつ|карандаш|鉛筆&#10;すごい|круто"></textarea>
+        <p class="muted small">Каждое слово с новой строки: <b>кана|перевод|кандзи</b>. Кандзи можно не писать. Строка <b># Название</b> задаёт категорию для слов ниже.</p>
+        <textarea id="abulk" rows="5" placeholder="# Числа&#10;いち|один|一&#10;に|два|二"></textarea>
         <button class="btn big" id="abulkadd">Добавить список</button>
       </details>
       <p class="muted small" id="amsg" aria-live="polite"></p></div>`;
     const msg = t => { document.getElementById('amsg').textContent = t; };
     document.getElementById('aadd').onclick = () => {
-      const r = addWords([[document.getElementById('ak').value, document.getElementById('ar').value, document.getElementById('aj').value]]);
+      const r = addWords([[document.getElementById('ak').value, document.getElementById('ar').value, document.getElementById('aj').value, document.getElementById('ac').value]]);
       if (r.added + r.pulled) { renderDict(); msg2(r); } else msg(r.note || 'Нужно заполнить кану и перевод');
     };
     document.getElementById('abulkadd').onclick = () => {
-      const rows = document.getElementById('abulk').value.split('\n').map(l => l.split('|')).filter(p => p.join('').trim());
+      const rows = parseBulk(document.getElementById('abulk').value);
       if (!rows.length) { msg('Список пуст'); return; }
       const r = addWords(rows);
       renderDict(); msg2(r);
@@ -723,7 +755,7 @@ function renderDict() {
   };
   const msg2 = r => {
     const parts = [];
-    if (r.added) parts.push(`добавлено: ${r.added}`);
+    if (r.added) parts.push(`добавлено: ${r.added} (в изучение пойдут по лимиту «Мои слова: новых в день»)`);
     if (r.pulled) parts.push(`уже были в колоде «Слова», поставил в изучение: ${r.pulled}`);
     if (r.skipped) parts.push(`пропущено (уже учишь или пустые строки): ${r.skipped}`);
     const el = document.getElementById('amsg'); if (el) el.textContent = parts.join(' · ');
@@ -731,16 +763,21 @@ function renderDict() {
   };
   const draw = () => {
     const q = dictState.q.trim().toLowerCase();
-    const items = lists[dictState.filter].filter(w => !q || [w.front, w.kanji, w.ru].join(' ').toLowerCase().includes(q));
     const isMine = dictState.filter === 'mine';
-    document.getElementById('dlist').innerHTML = items.length
+    const cats = isMine ? categories() : [];
+    if (dictState.cat && !cats.includes(dictState.cat)) dictState.cat = '';
+    const items = lists[dictState.filter].filter(w => (!q || [w.front, w.kanji, w.ru, w.cat].join(' ').toLowerCase().includes(q))
+      && (!isMine || !dictState.cat || w.cat === dictState.cat));
+    const chips = cats.length ? `<div class="chips">${['', ...cats].map(c => `<button class="chipf" data-c="${esc(c)}" aria-pressed="${(dictState.cat || '') === c}">${c ? esc(c) : 'Все'}</button>`).join('')}</div>` : '';
+    document.getElementById('dlist').innerHTML = chips + (items.length
       ? `<div class="dict">${items.map(w => {
           const st = S.cards[w.id] ? strength(S.cards[w.id].i) : 0;
           return `<div class="drow${isMine ? ' mine' : ''}" data-say="${esc(w.front)}" role="button" tabindex="0"><span class="dk"><span class="dkana">${esc(w.front)}</span>${w.kanji ? `<span class="dkanji">${esc(w.kanji)}</span>` : ''}</span>
-            <span class="dru">${esc(w.ru)}</span><span class="dots" title="Прочность запоминания">${S.cards[w.id] ? '●'.repeat(st) + '○'.repeat(4 - st) : 'новое'}</span>
+            <span class="dru">${esc(w.ru)}${isMine && w.cat && !dictState.cat ? `<span class="dcat">${esc(w.cat)}</span>` : ''}</span><span class="dots" title="Прочность запоминания">${S.cards[w.id] ? '●'.repeat(st) + '○'.repeat(4 - st) : 'новое'}</span>
             ${isMine ? `<span class="dact"><button class="dedit" data-id="${esc(w.id)}" aria-label="Изменить">✎</button><button class="ddel" data-id="${esc(w.id)}" aria-label="Удалить">✕</button></span>` : ''}</div>`;
         }).join('')}</div>`
-      : `<div class="done muted">${q ? 'Ничего не найдено' : dictState.filter === 'learned' ? 'Пока пусто. Слово попадёт сюда, когда ты несколько раз подряд вспомнишь его в повторениях.' : isMine ? 'Своих слов пока нет. Добавь первое выше.' : 'Пока пусто. Начни учить колоду «Слова» на главной.'}</div>`;
+      : `<div class="done muted">${q ? 'Ничего не найдено' : dictState.filter === 'learned' ? 'Пока пусто. Слово попадёт сюда, когда ты несколько раз подряд вспомнишь его в повторениях.' : isMine ? 'Своих слов пока нет. Добавь первое выше.' : 'Пока пусто. Начни учить колоду «Слова» на главной.'}</div>`);
+    document.querySelectorAll('.chipf').forEach(b => b.onclick = () => { dictState.cat = b.dataset.c; drawAdd(); draw(); });
     document.querySelectorAll('.drow').forEach(b => b.onclick = e => { if (!e.target.closest('.dact')) speak(b.dataset.say); });
     document.querySelectorAll('.dedit').forEach(b => b.onclick = e => {
       e.stopPropagation();
@@ -748,7 +785,7 @@ function renderDict() {
       const row = b.closest('.drow');
       row.outerHTML = `<div class="editrow" data-id="${esc(w.id)}">
         <div class="addrow"><input class="search" data-f="k" value="${esc(w.k)}" placeholder="Кана"><input class="search" data-f="r" value="${esc(w.r)}" placeholder="Перевод"></div>
-        <input class="search" data-f="j" value="${esc(w.j || '')}" placeholder="Кандзи (необязательно)">
+        <div class="addrow"><input class="search" data-f="j" value="${esc(w.j || '')}" placeholder="Кандзи (необяз.)"><input class="search" data-f="c" list="cats" value="${esc(w.c || '')}" placeholder="Категория"></div>
         <div class="row gap"><button class="btn" data-act="cancel">Отмена</button><button class="btn primary" data-act="save">Сохранить</button></div></div>`;
       const box = document.querySelector(`.editrow[data-id="${CSS.escape(w.id)}"]`);
       box.querySelector('[data-act=cancel]').onclick = () => draw();
@@ -756,7 +793,8 @@ function renderDict() {
         const v = f => cleanField(box.querySelector(`[data-f=${f}]`).value);
         if (!v('k') || !v('r')) { box.querySelector('[data-f=k]').focus(); return; }
         w.k = v('k'); w.r = v('r'); w.j = v('j');
-        setCustom(S.custom); Store.save(S, true); haptic('light'); renderDict();
+        if (v('c')) w.c = v('c'); else delete w.c;
+        setCustom(S.custom, S); Store.save(S, true); haptic('light'); renderDict();
       };
     });
     document.querySelectorAll('.ddel').forEach(b => b.onclick = e => {
@@ -764,7 +802,7 @@ function renderDict() {
       if (!b.classList.contains('armed')) { b.classList.add('armed'); b.textContent = 'Удалить?'; return; }
       S.custom = S.custom.filter(w => w.id !== b.dataset.id);
       delete S.cards[b.dataset.id];
-      setCustom(S.custom); Store.save(S, true); renderDict();
+      setCustom(S.custom, S); Store.save(S, true); renderDict();
     });
   };
   document.getElementById('dseg').onclick = e => {
@@ -777,25 +815,40 @@ function renderDict() {
   drawAdd(); draw();
 }
 
-// Добавление своих слов: rows = [[кана, перевод, кандзи], ...]
+// Список текстом: «кана|перевод|кандзи|категория», строка «# Название» задаёт категорию для строк ниже
+function parseBulk(text) {
+  let cat = '';
+  const rows = [];
+  for (const line of String(text || '').split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const h = /^#+\s*(.*)$/.exec(t);
+    if (h) { cat = cleanField(h[1]); continue; }
+    const p = t.split('|');
+    rows.push([p[0], p[1], p[2], p[3] != null && p[3].trim() ? p[3] : cat]);
+  }
+  return rows;
+}
+
+// Добавление своих слов: rows = [[кана, перевод, кандзи, категория], ...]
+// Новые слова встают в очередь и идут в изучение по лимиту «Мои слова: новых в день»
 function addWords(rows) {
   const today = dayNumber();
   const res = { added: 0, pulled: 0, skipped: 0 };
   for (const row of rows) {
-    const k = cleanField(row[0]), r = cleanField(row[1]), j = cleanField(row[2]);
+    const k = cleanField(row[0]), r = cleanField(row[1]), j = cleanField(row[2]), c = cleanField(row[3]);
     if (!k || !r) { res.skipped++; continue; }
-    const built = DATA.words.find(w => w.front === k);
+    const built = S.settings.builtin === false ? null : DATA.words.find(w => w.front === k);
     if (built) {
       if (S.cards[built.id]) { res.skipped++; continue; }
       S.cards[built.id] = newCardState(today); res.pulled++; continue;
     }
     if (S.custom.some(w => w.k === k && w.r.toLowerCase() === r.toLowerCase())) { res.skipped++; continue; }
     const id = 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    S.custom.push({ id, k, j, r });
-    S.cards[id] = newCardState(today); // свои слова сразу идут в изучение и повторения
+    S.custom.push({ id, k, j, r, ...(c ? { c } : {}) });
     res.added++;
   }
-  if (res.added + res.pulled) { setCustom(S.custom); Store.save(S, true); }
+  if (res.added + res.pulled) { setCustom(S.custom, S); Store.save(S, true); }
   return res;
 }
 
@@ -1150,6 +1203,11 @@ function renderSettings() {
     </select></label>
     <p class="muted small">Напоминание не придёт, если в этот день ты уже занимался. Чтобы бот мог писать, нажми у него «Старт».</p>` : ''}
     <p class="muted small">Колоды открываются по очереди: катакана и слова — после всей хираганы, кандзи — после всей катаканы. Слова на катакане появятся, когда пройдёшь катакану.</p>
+    <h3>Слова</h3>
+    <label class="set-row"><span>Встроенный набор слов N5</span><input type="checkbox" id="builtin" ${S.settings.builtin !== false ? 'checked' : ''}></label>
+    <p class="muted small">Выключи, если хочешь учить только свои слова (вкладка «Словарь» → «Мои»).</p>
+    <button class="btn danger" id="wreset">Убрать все слова из изучения</button>
+    <p class="muted small">Удалит прогресс по всем словам и сами «Мои слова». Кана и кандзи останутся.</p>
     <h3>Резервная копия</h3>
     <p class="muted small">Прогресс хранится в облаке Telegram. Для надёжности можно скопировать его текстом.</p>
     <textarea id="backup" rows="4" placeholder="Сюда появится копия, или вставь свою для восстановления"></textarea>
@@ -1169,6 +1227,22 @@ function renderSettings() {
     setTimeout(() => { s.hidden = true; }, 1500);
   };
   document.getElementById('tts').onchange = e => { S.settings.tts = e.target.checked; Store.save(S); };
+  document.getElementById('builtin').onchange = e => {
+    S.settings.builtin = e.target.checked;
+    setCustom(S.custom, S); Store.save(S, true);
+  };
+  const wr = document.getElementById('wreset');
+  wr.onclick = () => {
+    if (!wr.classList.contains('armed')) { wr.classList.add('armed'); wr.textContent = 'Точно? Нажми ещё раз'; return; }
+    for (const id of Object.keys(S.cards)) {
+      const c = BY_ID[id];
+      if (!c || c.deck === 'words' || c.deck === 'mine' || c.deck === 'wk') delete S.cards[id];
+    }
+    S.custom = []; setCustom(S.custom, S);
+    for (const k of ['words', 'mine', 'wk']) delete S.daily.new[k];
+    Store.save(S, true); haptic('heavy');
+    wr.textContent = 'Слова убраны ✓'; wr.disabled = true;
+  };
   const rem = document.getElementById('remind');
   if (rem) rem.onchange = () => { S.settings.remind = parseInt(rem.value, 10); Store.save(S, true); ping(true); };
   const ta = document.getElementById('backup');
@@ -1180,11 +1254,11 @@ function renderSettings() {
     let parsed; try { parsed = JSON.parse(ta.value); } catch (e) { alert('Не получилось прочитать копию'); return; }
     if (!parsed || typeof parsed.cards !== 'object') { alert('Это не похоже на копию прогресса'); return; }
     if (!confirm('Заменить текущий прогресс этой копией?')) return;
-    S = normalize(parsed); setCustom(S.custom); Store.save(S, true); renderHome();
+    S = normalize(parsed); setCustom(S.custom, S); Store.save(S, true); renderHome();
   };
   document.getElementById('reset').onclick = () => {
     if (!confirm('Точно стереть весь прогресс? Это нельзя отменить.')) return;
-    S = freshState(); setCustom(S.custom); Store.save(S, true); renderHome();
+    S = freshState(); setCustom(S.custom, S); Store.save(S, true); renderHome();
   };
 }
 
@@ -1195,10 +1269,8 @@ async function boot() {
     try { if (tg.isVersionAtLeast('7.7')) tg.disableVerticalSwipes(); } catch (e) {}
   }
   S = await Store.load();
-  setCustom(S.custom);
-  // свои слова, добавленные раньше, тоже ставим в изучение
+  setCustom(S.custom, S);
   let pulled = false;
-  for (const c of DATA.mine) if (!S.cards[c.id]) { S.cards[c.id] = newCardState(dayNumber()); pulled = true; }
   if (S.time.start == null) { S.time.start = dayNumber(); pulled = true; }
   if (pulled) Store.save(S, true);
   startTimeTracking();
@@ -1220,4 +1292,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
