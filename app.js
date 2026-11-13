@@ -252,17 +252,26 @@ function markStudied(state, today) {
 
 /* ================= Хранение: Telegram CloudStorage + localStorage ================= */
 
-const CHUNK = 80; // карточек на один ключ CloudStorage (лимит значения 4096 символов)
+// Лимит значения CloudStorage — 4096; японские и русские буквы в UTF-8 весят 2–3 байта,
+// поэтому режем строки по байтам с запасом, а не по символам
+const CHUNK_BYTES = 3800;
+const utf8len = str => { let n = 0; for (const ch of str) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; } return n; };
+function packLines(lines, max = CHUNK_BYTES) {
+  const out = []; let cur = '', curB = 0;
+  for (const line of lines) {
+    const b = utf8len(line);
+    if (cur && curB + 1 + b > max) { out.push(cur); cur = ''; curB = 0; }
+    cur = cur ? cur + '\n' + line : line; curB += (curB ? 1 : 0) + b;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 function serializeChunks(state) {
-  const ids = Object.keys(state.cards), chunks = [];
-  for (let k = 0; k < ids.length; k += CHUNK) {
-    chunks.push(ids.slice(k, k + CHUNK).map(id => {
-      const c = state.cards[id];
-      return [id, c.i, c.e, c.d, c.r, c.l].join('|');
-    }).join('\n'));
-  }
-  return chunks;
+  return packLines(Object.keys(state.cards).map(id => {
+    const c = state.cards[id];
+    return [id, c.i, c.e, c.d, c.r, c.l].join('|');
+  }));
 }
 function parseChunks(chunks) {
   const cards = {};
@@ -292,13 +301,7 @@ function serializeTime(state) {
   for (const d of Object.keys(t.days).sort((a, b) => a - b)) {
     const v = t.days[d]; lines.push(`${d}|${Math.round(v.a || 0)}|${Math.round(v.m || 0)}`);
   }
-  const out = []; let cur = '';
-  for (const line of lines) {
-    if (cur && cur.length + line.length + 1 > 3500) { out.push(cur); cur = ''; }
-    cur = cur ? cur + '\n' + line : line;
-  }
-  if (cur) out.push(cur);
-  return out;
+  return packLines(lines);
 }
 function parseTime(chunks) {
   const t = { start: null, days: {} };
@@ -321,14 +324,7 @@ const GROUPS = [
 ];
 // Свои слова — отдельными кусками до ~3500 символов
 function serializeCustom(state) {
-  const out = []; let cur = '';
-  for (const w of state.custom || []) {
-    const line = [w.id, w.k, w.j || '', w.r, ...(w.c ? [w.c] : [])].map(cleanField).join('\t');
-    if (cur && cur.length + line.length + 1 > 3500) { out.push(cur); cur = ''; }
-    cur = cur ? cur + '\n' + line : line;
-  }
-  if (cur) out.push(cur);
-  return out;
+  return packLines((state.custom || []).map(w => [w.id, w.k, w.j || '', w.r, ...(w.c ? [w.c] : [])].map(cleanField).join('\t')));
 }
 function parseCustom(chunks) {
   const list = [];
@@ -361,7 +357,7 @@ const Store = {
     return new Promise(resolve => {
       const t = setTimeout(() => resolve(null), 5000);
       try {
-        this.cloud[method](...args, (err, res) => { clearTimeout(t); resolve(err ? null : (res === undefined ? true : res)); });
+        this.cloud[method](...args, (err, res) => { clearTimeout(t); if (err) this.lastErr = String(err); resolve(err ? null : (res === undefined ? true : res)); });
       } catch (e) { clearTimeout(t); resolve(null); }
     });
   },
@@ -426,7 +422,7 @@ const Store = {
 
 function syncText() {
   if (!Store.cloud) return `⚠️ Прогресс только на этом устройстве: ${Store.why}`;
-  if (Store.failed) return '⚠️ Не удалось сохранить в облако, попробую ещё раз';
+  if (Store.failed) return '⚠️ Не удалось сохранить в облако, попробую ещё раз' + (Store.lastErr ? ` (${Store.lastErr})` : '');
   if (!Store.lastSync) return '☁️ Прогресс хранится в облаке Telegram';
   const d = new Date(Store.lastSync);
   return `☁️ Сохранено в облаке Telegram · ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -501,17 +497,6 @@ function renderHome() {
   rollDay(S, today);
   const dueAll = dueIds(S, today).length;
   let newAll = 0;
-  const catRow = cat => {
-    const items = DATA.mine.filter(c => c.cat === cat);
-    const intro = items.filter(c => S.cards[c.id]).length;
-    const due = dueIds(S, today, 'mine', cat).length;
-    const nw = newAvailable(S, DECKS.find(x => x.key === 'mine'), 0, cat).length;
-    const playable = due + nw > 0;
-    return `<div class="deck sub${playable ? ' playable' : ''}" data-k="mine#${esc(cat)}">
-      <div class="deck-top"><span>${esc(cat)}</span><span class="muted">${intro}/${items.length}</span></div>
-      <div class="bar"><i style="width:${items.length ? (intro / items.length * 100).toFixed(1) : 0}%"></i></div>
-      <div class="muted small">${intro === items.length ? `пройдено, повторений: ${due}` : `новых: ${nw} · повторить: ${due}`}${playable ? ' · <span class="accent">только её ▶</span>' : ''}</div></div>`;
-  };
   const rows = DECKS.filter(d => !(d.key === 'words' && S.settings.builtin === false)).map(d => {
     const total = DATA[d.key].length, intro = introducedCount(S, d.key);
     const due = dueIds(S, today, d.key).length;
@@ -529,7 +514,7 @@ function renderHome() {
       <div class="deck-top"><b>${esc(d.name)}</b><span class="muted">${intro}/${total}</span></div>
       <div class="bar"><i style="width:${total ? (intro / total * 100).toFixed(1) : 0}%"></i></div>
       <div class="muted small">${status}${playable ? ' · <span class="accent">учить только её ▶</span>' : ''}</div></div>`
-      + (d.key === 'mine' ? categories().map(catRow).join('') : '');
+
   }).join('');
   const tomorrow = dueIds(S, today + 1).length;
   const streak = S.streak.last >= today - 1 ? S.streak.count : 0;
@@ -1296,7 +1281,8 @@ async function boot() {
   setCustom(S.custom, S);
   let pulled = false;
   if (S.time.start == null) { S.time.start = dayNumber(); pulled = true; }
-  if (pulled) Store.save(S, true);
+  // всегда досинхронизируем облако: если прошлое сохранение не прошло, локальная копия новее
+  Store.save(S, true);
   startTimeTracking();
   if ('speechSynthesis' in window) { try { speechSynthesis.getVoices(); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (document.hidden && S) Store.save(S, true); });
