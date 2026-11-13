@@ -572,13 +572,17 @@ function startSession(extra, onlyDeck = null) {
 function renderPracticePicker() {
   setTabs(null);
   setBack(renderHome);
-  const hard = practiceQueue(S, 'hard', 1e9).length;
-  const opts = [{ key: 'all', name: 'Всё вперемешку', n: Object.keys(S.cards).length }];
-  if (hard) opts.push({ key: 'hard', name: 'Сложные карточки', n: hard });
-  for (const d of DECKS) { const n = introducedCount(S, d.key); if (n) opts.push({ key: d.key, name: d.name, n }); }
+  // считаем ровно то, что попадёт в тренировку: только карточки, которые уже хоть раз проверялись
+  const count = k => practiceQueue(S, k, 1e9).length;
+  const opts = [{ key: 'all', name: 'Всё вперемешку', n: count('all') }, { key: 'hard', name: 'Сложные карточки', n: count('hard') }];
+  for (const d of DECKS) opts.push({ key: d.key, name: d.name, n: count(d.key) });
+  const shown = opts.filter(o => o.n > 0);
   $app().innerHTML = `<h2>Повторить изученное</h2>
     <p class="muted small">Свободная тренировка в любое время, до 20 карточек за раз. Расписание повторений не сдвигается, а если что-то забыл — карточка вернётся в ближайшие повторения.</p>
-    ${opts.map(o => `<button class="btn big pick" data-k="${o.key}"><span>${esc(o.name)}</span><span class="muted">${o.n}</span></button>`).join('')}`;
+    ${shown.length ? shown.map(o => `<button class="btn big pick" data-k="${o.key}"><span>${esc(o.name)}</span><span class="muted">${o.n}</span></button>`).join('')
+      : `<div class="done muted">Пока нечего повторять. Карточка появится здесь, когда ты хотя бы раз ответишь на неё в обычном занятии.</div>
+         <button class="btn big" id="pback">На главную</button>`}`;
+  const pb = document.getElementById('pback'); if (pb) pb.onclick = renderHome;
   $app().querySelectorAll('.pick').forEach(b => b.onclick = () => startPractice(b.dataset.k));
 }
 
