@@ -214,6 +214,8 @@ function practiceQueue(state, filter, size = 20) {
     const c = BY_ID[id];
     if (!c) continue;
     const st = state.cards[id];
+    // карточка только показана, но ещё ни разу не проверялась — ей место в обычном занятии, не в тренировке
+    if (!(st.r > 0)) continue;
     if (filter === 'hard' ? !(st.l > 0 || st.e < 230 || st.i <= 1) : (filter !== 'all' && c.deck !== filter)) continue;
     pool.push({ id, w: st.l * 3 + 10 / (st.i + 1) + Math.random() * 4 });
   }
