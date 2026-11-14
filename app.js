@@ -933,6 +933,29 @@ function findDuplicate(k, j, exceptId = null) {
   return S.custom.find(w => w.id !== exceptId && w.k === k && (!j || !w.j || w.j === j)) || null;
 }
 
+// Встроенный набор выключен: слова из него, которые уже в изучении, переносим в «Мои» вместе с прогрессом
+// (и их карточки «в кандзи» и «RU → JP»). Безопасно вызывать повторно.
+function migrateBuiltinToMine(state) {
+  let moved = 0;
+  for (const w of DATA.words) {
+    const st = state.cards[w.id];
+    if (!st) continue;
+    let mine = state.custom.find(x => x.k === w.front && (!w.kanji || !x.j || x.j === w.kanji));
+    if (!mine) {
+      mine = { id: 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), k: w.front, j: w.kanji || '', r: w.ru };
+      state.custom.push(mine);
+    }
+    for (const pre of ['', 'x:', 'r:']) {
+      const from = pre + w.id, to = pre + mine.id;
+      if (state.cards[from] && !state.cards[to]) state.cards[to] = state.cards[from];
+      delete state.cards[from];
+    }
+    moved++;
+  }
+  if (moved) setCustom(state.custom, state);
+  return moved;
+}
+
 // Добавление своих слов: rows = [[кана, перевод, кандзи, категория], ...]
 // Новые слова встают в очередь и идут в изучение по лимиту «Мои слова: новых в день»
 function addWords(rows) {
@@ -1309,7 +1332,7 @@ function renderSettings() {
     <p class="muted small">Колоды открываются по очереди: катакана и слова — после всей хираганы, кандзи — после всей катаканы. Слова на катакане появятся, когда пройдёшь катакану.</p>
     <h3>Слова</h3>
     <label class="set-row"><span>Встроенный набор слов N5</span><input type="checkbox" id="builtin" ${S.settings.builtin !== false ? 'checked' : ''}></label>
-    <p class="muted small">Выключи, если хочешь учить только свои слова (вкладка «Словарь» → «Мои»).</p>
+    <p class="muted small">Выключи, если хочешь учить только свои слова (вкладка «Словарь» → «Мои»). Слова из набора, которые ты уже учишь, перейдут в «Мои» вместе с прогрессом.</p>
     <button class="btn danger" id="wreset">Убрать все слова из изучения</button>
     <p class="muted small">Удалит прогресс по всем словам и сами «Мои слова». Кана и кандзи останутся.</p>
     <h3>Резервная копия</h3>
@@ -1333,6 +1356,7 @@ function renderSettings() {
   document.getElementById('tts').onchange = e => { S.settings.tts = e.target.checked; Store.save(S); };
   document.getElementById('builtin').onchange = e => {
     S.settings.builtin = e.target.checked;
+    if (!S.settings.builtin) migrateBuiltinToMine(S);
     setCustom(S.custom, S); Store.save(S, true);
   };
   const wr = document.getElementById('wreset');
@@ -1374,6 +1398,7 @@ async function boot() {
   }
   S = await Store.load();
   setCustom(S.custom, S);
+  if (S.settings.builtin === false) migrateBuiltinToMine(S);
   let pulled = false;
   if (S.time.start == null) { S.time.start = dayNumber(); pulled = true; }
   // всегда досинхронизируем облако: если прошлое сохранение не прошло, локальная копия новее
@@ -1397,4 +1422,4 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot();
-if (typeof module !== 'undefined') module.exports = { revEligible, normAnswer, checkTyped, findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
+if (typeof module !== 'undefined') module.exports = { migrateBuiltinToMine, revEligible, normAnswer, checkTyped, findDuplicate, parseBulk, categories, splitDeck, wkEligible, kanjiOrder, rebuildWK, serializeTime, parseTime, timeStats, addWords, setCustom, serializeCustom, parseCustom, practiceQueue, DATA, DECKS, BY_ID, schedule, buildQueue, freshState, normalize, serializeChunks, parseChunks, newAvailable, newCardState, dayNumber, rollDay, markStudied, metaOf };
